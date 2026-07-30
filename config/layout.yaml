@@ -52,10 +52,9 @@ blink:
 # interior walls not duplicated), so total panels > 2x cell count.
 # North rectangular block, tapering open toward the front-right.
 layout: |
-  X X X X X X X X X
-  X X X X X X X X X
-  X X X X X X X X .
-  X X X X X X X . .
-  X X X X X . . . .
-  X X X X . . . . .
-  X X . . . . . . .
+  X X X X X X X X
+  X X X X X X X X
+  X X X X X X X .
+  X X X X X X . .
+  X X X X X . . .
+  X X X . . . . .
