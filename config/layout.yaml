@@ -31,6 +31,14 @@ motion:
   velocity: 120     # default speed in position-units / second (full travel ~2.1s)
   curve: smooth     # default: linear | smooth
 
+# Counterweights: each panel's cable runs over the ceiling and back down to a metal
+# cylinder weight that moves INVERSELY to the panel (panel at top -> weight at bottom).
+counterweight:
+  radius: 0.020     # cylinder radius (m) — slim
+  height: 0.30      # cylinder length (m) — long
+  travelMin: 0.35   # world Y of weight when its panel is at the top (position 255)
+  travelMax: 1.95   # world Y of weight when its panel is at the bottom (position 0)
+
 blink:
   peak: 0.7         # max brightness (subtle)
   attack: 0.08      # s, 0 -> peak

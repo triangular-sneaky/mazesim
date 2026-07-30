@@ -8,19 +8,19 @@ demos:
     name: Wave (N→S)
     desc: rows rise then settle, north to south
     generator: wave
-    params: { axis: y, interval: 200, up: 255, down: 110, velocity: 180 }
+    params: { axis: y, interval: 200, up: 255, down: 110, velocity: 90 }
 
   - id: wave-we
     name: Wave (W→E)
     desc: columns rise then settle, west to east
     generator: wave
-    params: { axis: x, interval: 200, up: 255, down: 110, velocity: 180 }
+    params: { axis: x, interval: 200, up: 255, down: 110, velocity: 90 }
 
   - id: ripple
     name: Ripple
     desc: radial rise from the grid center
     generator: ripple
-    params: { interval: 110, up: 255, down: 120, velocity: 200 }
+    params: { interval: 110, up: 255, down: 120, velocity: 100 }
 
   - id: sparkle
     name: Sparkle

@@ -20,6 +20,18 @@ export class Grid {
     const m = config.motion;
     this.travelMin = m.travelMin;
     this.travelMax = m.travelMax;
+
+    const cw = config.counterweight || {};
+    this.cwRadius = cw.radius ?? 0.028;
+    this.cwHeight = cw.height ?? 0.13;
+    this.cwMin = cw.travelMin ?? 0.35;   // weight Y when panel is at the top
+    this.cwMax = cw.travelMax ?? 1.95;   // weight Y when panel is at the bottom
+  }
+
+  /** Counterweight height: inverse of panel position (panel up -> weight down). */
+  counterweightHeight(position) {
+    const t = position / 255;
+    return this.cwMax - (this.cwMax - this.cwMin) * t;
   }
 
   /** NW corner world (x,z) of a cell. */

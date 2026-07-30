@@ -20,10 +20,15 @@ export class PanelMeshes {
     this.group = new THREE.Group();
     this.stringMat = new THREE.LineBasicMaterial({ color: 0x1c1e22 });
 
+    // Shared counterweight geometry + brushed-metal material (one instance per panel).
+    this.cwGeo = new THREE.CylinderGeometry(grid.cwRadius, grid.cwRadius, grid.cwHeight, 10);
+    this.cwMat = new THREE.MeshStandardMaterial({ color: 0x9a9488, metalness: 0.85, roughness: 0.35 });
+
     for (const panel of panels) {
       const item = this._build(panel);
       this.items.set(panel.key, item);
     }
+    this._clusterCounterweights();
     scene.add(this.group);
     this.sync(); // place at initial positions
   }
@@ -51,7 +56,43 @@ export class PanelMeshes {
     ]), this.stringMat);
     this.group.add(line);
 
-    return { mesh, line, panel };
+    // Counterweight: a metal cylinder on its own cable. Its hang-point (cwX,cwZ) is
+    // assigned later by _clusterCounterweights() so weights bunch 4-to-a-point.
+    const cw = new THREE.Mesh(this.cwGeo, this.cwMat);
+    this.group.add(cw);
+    const cwLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0),
+    ]), this.stringMat);
+    this.group.add(cwLine);
+
+    return { mesh, line, panel, cw, cwLine, cwX: 0, cwZ: 0 };
+  }
+
+  /**
+   * Group counterweights into bunches of 4 at shared hang-points (not one per grid
+   * node). Panels are ordered by location so each bunch is spatially local; the 4
+   * weights sit in a tight 2x2 around the bunch's centroid.
+   */
+  _clusterCounterweights() {
+    const arr = [...this.items.values()].sort((a, b) => {
+      const pa = a.panel, pb = b.panel;
+      return pa.y - pb.y || pa.x - pb.x || (pa.orient < pb.orient ? -1 : 1);
+    });
+    const o = 0.028; // tight bunch spacing
+    const offsets = [[-o, -o], [o, -o], [-o, o], [o, o]];
+    for (let i = 0; i < arr.length; i += 4) {
+      const bunch = arr.slice(i, i + 4);
+      let cx = 0, cz = 0;
+      for (const it of bunch) {
+        const n = this.grid.cellNW(it.panel.x, it.panel.y);
+        cx += n.x; cz += n.z;
+      }
+      cx /= bunch.length; cz /= bunch.length;
+      bunch.forEach((it, k) => {
+        it.cwX = cx + offsets[k % 4][0];
+        it.cwZ = cz + offsets[k % 4][1];
+      });
+    }
   }
 
   /** Highlight a selected panel (or clear with null). */
@@ -77,6 +118,15 @@ export class PanelMeshes {
       pts.setXYZ(0, pl.center.x, this.ceilingY, pl.center.z);
       pts.setXYZ(1, pl.center.x, topY, pl.center.z);
       pts.needsUpdate = true;
+
+      // Counterweight moves inversely; its cable hangs from the ceiling to the weight.
+      const cwY = g.counterweightHeight(p.position);
+      item.cw.position.set(item.cwX, cwY, item.cwZ);
+      const cwTop = cwY + g.cwHeight / 2;
+      const cpts = item.cwLine.geometry.attributes.position;
+      cpts.setXYZ(0, item.cwX, this.ceilingY, item.cwZ);
+      cpts.setXYZ(1, item.cwX, cwTop, item.cwZ);
+      cpts.needsUpdate = true;
     }
   }
 }
