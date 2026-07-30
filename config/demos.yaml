@@ -1,0 +1,53 @@
+# Demo bank — coordinated panel behaviours.
+# Each demo names a generator (implemented in src/demos/player.js) that builds a
+# timed action list from the live panel set, so demos adapt to any layout.
+# Generators: allTo | wave | ripple | sparkle | scatter
+
+demos:
+  - id: wave-ns
+    name: Wave (N→S)
+    desc: rows rise then settle, north to south
+    generator: wave
+    params: { axis: y, interval: 200, up: 255, down: 110, velocity: 180 }
+
+  - id: wave-we
+    name: Wave (W→E)
+    desc: columns rise then settle, west to east
+    generator: wave
+    params: { axis: x, interval: 200, up: 255, down: 110, velocity: 180 }
+
+  - id: ripple
+    name: Ripple
+    desc: radial rise from the grid center
+    generator: ripple
+    params: { interval: 110, up: 255, down: 120, velocity: 200 }
+
+  - id: sparkle
+    name: Sparkle
+    desc: random LED blinks across the field
+    generator: sparkle
+    params: { count: 80, interval: 110 }
+
+  - id: scatter
+    name: Scatter
+    desc: random-ish panel movements and blinks
+    generator: scatter
+    params: { duration: 8000, moves: 60, blinks: 40, minPos: 0, maxPos: 255 }
+
+  - id: all-up
+    name: All up
+    desc: raise every panel to the top
+    generator: allTo
+    params: { position: 255 }
+
+  - id: all-down
+    name: All down
+    desc: lower every panel to the floor
+    generator: allTo
+    params: { position: 0 }
+
+  - id: rest
+    name: Return to mid
+    desc: send every panel to mid height
+    generator: allTo
+    params: { position: 128 }

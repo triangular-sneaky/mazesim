@@ -1,0 +1,18 @@
+{
+  "name": "mazesim",
+  "version": "0.1.0",
+  "description": "mazesim — web 3D panel-grid simulator (Phase 1: the visible model)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0",
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

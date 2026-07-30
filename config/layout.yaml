@@ -1,0 +1,53 @@
+# mazesim — layout & defaults
+# Coordinate system:
+#   X = west(0) -> east(+)     Z = north(0) -> south/front(+)     Y = up
+# Each occupied cell holds a PAIR of panels: one `h` (wide face E-W) and one `v` (wide face N-S).
+# Panels are addressed in the API/UI as (x, y, orient) with 0-based cell indices.
+
+room:
+  width: 12.0    # X extent (m)
+  depth: 10.0    # Z extent (m)
+  height: 5.5    # Y extent (m)
+
+grid:
+  originX: 1.0   # world X of cell (0,0) NW corner
+  originZ: 1.0   # world Z of cell (0,0) NW corner (north edge)
+  cellWidth: 1.00   # X spacing between cells (m) — equal to depth for square cube frames
+  cellDepth: 1.00   # Z spacing between cells (m)
+
+panel:
+  width: 0.65      # long/wide dimension (m) — runs along X for `h`, along Z for `v`
+  height: 0.45     # vertical dimension (m)
+  thickness: 0.012 # (m)
+  opacity: 0.5     # translucent acrylic
+  emissive: "#fff1d6"   # warm-white glow tint (only shows while blinking)
+  baseEmissive: 0.0     # off panels emit no light; glow comes only from blink
+
+# Vertical travel: logical position 0..255 maps linearly to the panel-center height range.
+motion:
+  travelMin: 0.80   # world Y of panel center at position 0 (near floor)
+  travelMax: 4.10   # world Y of panel center at position 255 (near ceiling)
+  restPosition: 255 # initial position on load (all up)
+  velocity: 120     # default speed in position-units / second (full travel ~2.1s)
+  curve: smooth     # default: linear | smooth
+
+blink:
+  peak: 0.7         # max brightness (subtle)
+  attack: 0.08      # s, 0 -> peak
+  sustain: 0.15     # s, hold at peak
+  decay: 0.40       # s, peak -> 0
+
+# Occupied-cell matrix. Row 0 = north (back), column 0 = west (left).
+# Any non-space, non-'.' char = occupied. '.' or space = empty.
+# Rows may be shorter than the widest row; missing trailing cells are empty.
+# Every occupied square is framed on all 4 sides (bounding edges drawn once, shared
+# interior walls not duplicated), so total panels > 2x cell count.
+# North rectangular block, tapering open toward the front-right.
+layout: |
+  X X X X X X X X X
+  X X X X X X X X X
+  X X X X X X X X .
+  X X X X X X X . .
+  X X X X X . . . .
+  X X X X . . . . .
+  X X . . . . . . .

@@ -1,0 +1,236 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/**
+ * Builds the three.js scene: dark room shell, floor, ceiling rail hint, lighting,
+ * camera + OrbitControls, and named camera presets. Rendering of panels is added
+ * by panelMesh.js into `scene`.
+ */
+export class SceneView {
+  constructor(container, config, grid, cells) {
+    this.config = config;
+    this.grid = grid;
+
+    const room = config.room;
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setSize(container.clientWidth, container.clientHeight);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer.setClearColor(0x07080a, 1);
+    container.appendChild(this.renderer.domElement);
+
+    this.scene = new THREE.Scene();
+    this.scene.fog = new THREE.Fog(0x07080a, 10, 26);
+
+    this.camera = new THREE.PerspectiveCamera(
+      55, container.clientWidth / container.clientHeight, 0.1, 100,
+    );
+
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.08;
+    // Look at the center of the occupied field.
+    const b = grid.bounds(cells);
+    this.fieldBounds = b;
+    this.fieldCenter = new THREE.Vector3(
+      (b.minX + b.maxX) / 2,
+      (grid.travelMin + grid.travelMax) / 2,
+      (b.minZ + b.maxZ) / 2,
+    );
+    this.controls.target.copy(this.fieldCenter);
+
+    this._buildRoom(room);
+    this._buildLights(room);
+    this._buildFigure(room);
+    this.setPreset('audience');
+
+    window.addEventListener('resize', () => this._onResize(container));
+  }
+
+  _buildRoom(room) {
+    const w = room.width, d = room.depth, h = room.height;
+
+    // Floor — warm concrete that catches the light pool.
+    const floorGeo = new THREE.PlaneGeometry(w, d);
+    const floorMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2018, roughness: 0.95, metalness: 0.0,
+    });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(w / 2, 0, d / 2);
+    this.scene.add(floor);
+
+    // Two back walls (north at z=0, west at x=0) forming the back-left corner behind
+    // the dense field. White material that reads dark under the low light. Toggleable.
+    this.walls = new THREE.Group();
+    const wallMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff, roughness: 1.0, metalness: 0.0, side: THREE.DoubleSide,
+    });
+    const north = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+    north.position.set(w / 2, h / 2, 0);               // faces +Z (into room)
+    this.walls.add(north);
+    const west = new THREE.Mesh(new THREE.PlaneGeometry(d, h), wallMat);
+    west.rotation.y = Math.PI / 2;                     // faces +X
+    west.position.set(0, h / 2, d / 2);
+    this.walls.add(west);
+    this.scene.add(this.walls);
+
+    // Ceiling rail hint: thin lines running north->south (front-back) across the field.
+    const railMat = new THREE.LineBasicMaterial({ color: 0x2a2d33 });
+    const rails = new THREE.Group();
+    const g = this.grid;
+    // Draw a rail near each grid column line, spanning the room depth, just below ceiling.
+    const railY = h - 0.15;
+    const cols = 12;
+    for (let i = 0; i <= cols; i++) {
+      const x = g.originX + i * g.cellWidth;
+      if (x > w) break;
+      const pts = [new THREE.Vector3(x, railY, 0.5), new THREE.Vector3(x, railY, d - 0.5)];
+      rails.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), railMat));
+    }
+    this.scene.add(rails);
+
+    // Reference marker for the piano (front-left), purely visual context.
+    const piano = new THREE.Mesh(
+      new THREE.BoxGeometry(1.4, 1.0, 0.6),
+      new THREE.MeshStandardMaterial({ color: 0x0c0c0e, roughness: 0.6 }),
+    );
+    piano.position.set(1.0, 0.5, d - 1.0);
+    this.scene.add(piano);
+  }
+
+  _buildLights(room) {
+    // Very low ambient — overall dim; the scattered panel lights carry the room.
+    this.scene.add(new THREE.AmbientLight(0x1c1913, 0.22));
+
+    // Faint warm pool on the floor toward the front-center (like the photo).
+    const pool = new THREE.SpotLight(0xffd39a, 3, 0, Math.PI / 5, 0.6, 0);
+    pool.position.set(room.width * 0.5, room.height, room.depth * 0.72);
+    pool.target.position.set(room.width * 0.5, 0, room.depth * 0.72);
+    this.scene.add(pool);
+    this.scene.add(pool.target);
+
+    // Whisper of cool fill so forms don't go fully black at rest.
+    const fill = new THREE.DirectionalLight(0x6b768c, 0.12);
+    fill.position.set(room.width * 0.3, room.height, room.depth * 0.2);
+    this.scene.add(fill);
+
+    // Scattered warm light fixtures on the ceiling — the room's actual light sources.
+    // They illuminate the field and floor from above; panels stay dark until they blink.
+    const b = this.fieldBounds;
+    const ceilY = room.height - 0.1;
+    const spots = [
+      [0.25, 0.2], [0.75, 0.25],
+      [0.5, 0.5],
+      [0.25, 0.8], [0.75, 0.8],
+    ];
+    for (const [fx, fz] of spots) {
+      const x = b.minX + fx * (b.maxX - b.minX);
+      const z = b.minZ + fz * (b.maxZ - b.minZ);
+      const fixture = new THREE.PointLight(0xffd9a8, 6, 9, 2);
+      fixture.position.set(x, ceilY, z);
+      this.scene.add(fixture);
+      // tiny visible bulb
+      const bulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.04, 8, 8),
+        new THREE.MeshBasicMaterial({ color: 0xffe6bf }),
+      );
+      bulb.position.copy(fixture.position);
+      this.scene.add(bulb);
+    }
+  }
+
+  _buildFigure(room) {
+    // A static, stylized standing figure — an East Asian woman — placed on the open
+    // floor near the west wall, facing into the room toward the panel field. Purely
+    // decorative: a handful of cheap primitives grouped so it stays performant.
+    const fig = new THREE.Group();
+
+    // Shared low-poly materials.
+    const skin = new THREE.MeshStandardMaterial({ color: 0xe6b98f, roughness: 0.75, metalness: 0.0 });
+    const hair = new THREE.MeshStandardMaterial({ color: 0x14100d, roughness: 0.6, metalness: 0.0 });
+    const dress = new THREE.MeshStandardMaterial({ color: 0x8f3f52, roughness: 0.85, metalness: 0.0 });
+
+    // Legs — two slim cylinders from floor to hip (~0.8m).
+    for (const dx of [-0.09, 0.09]) {
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.045, 0.8, 8), skin);
+      leg.position.set(dx, 0.4, 0);
+      fig.add(leg);
+    }
+
+    // Skirt — a cone flaring from the hips, hem at knee level (~0.5m to ~0.9m).
+    const skirt = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.55, 12), dress);
+    skirt.position.set(0, 0.75, 0);
+    fig.add(skirt);
+
+    // Torso — a capsule for the upper body (hips ~0.85m to shoulders ~1.35m).
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.13, 0.34, 4, 8), dress);
+    torso.position.set(0, 1.1, 0);
+    fig.add(torso);
+
+    // Arms — slim capsules resting at the sides, angled slightly outward.
+    for (const dx of [-1, 1]) {
+      const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.4, 4, 8), skin);
+      arm.position.set(dx * 0.19, 1.12, 0);
+      arm.rotation.z = dx * 0.12;
+      fig.add(arm);
+    }
+
+    // Neck — short cylinder bridging shoulders to head.
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.08, 8), skin);
+    neck.position.set(0, 1.42, 0);
+    fig.add(neck);
+
+    // Head — sphere with skin tone (~1.55m).
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), skin);
+    head.position.set(0, 1.55, 0);
+    fig.add(head);
+
+    // Hair — a slightly larger dark half-sphere cap plus a bun at the back.
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.108, 16, 12), hair);
+    cap.position.set(0, 1.57, -0.01);
+    cap.scale.set(1.0, 1.05, 1.05);
+    fig.add(cap);
+    const bun = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10), hair);
+    bun.position.set(0, 1.55, -0.11);
+    fig.add(bun);
+
+    // Position on the floor near the west wall, in the open front-left space, turned to
+    // face across the room toward the panel field (roughly +X / into the room).
+    fig.position.set(1.2, 0, room.depth * 0.6);
+    fig.rotation.y = Math.PI / 2; // face +X, away from the west wall, into the room
+    this.scene.add(fig);
+    this.figure = fig;
+  }
+
+  /** Toggle the two back walls. */
+  setWallsVisible(v) {
+    if (this.walls) this.walls.visible = v;
+  }
+
+  /** Camera presets framed around the field. */
+  setPreset(name) {
+    const room = this.config.room;
+    const c = this.fieldCenter;
+    if (name === 'top') {
+      this.camera.position.set(c.x, room.height + 8, c.z + 0.01);
+    } else if (name === 'inside') {
+      this.camera.position.set(c.x, this.grid.travelMin + 0.3, c.z);
+    } else {
+      // audience: stand at the front (south), looking north into the field.
+      this.camera.position.set(room.width * 0.5, 1.6, room.depth + 3.5);
+    }
+    this.controls.update();
+  }
+
+  _onResize(container) {
+    const w = container.clientWidth, h = container.clientHeight;
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(w, h);
+  }
+
+  render() {
+    this.controls.update();
+    this.renderer.render(this.scene, this.camera);
+  }
+}

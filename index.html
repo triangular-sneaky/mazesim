@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mazesim</title>
+    <style>
+      :root {
+        --bg: #0a0b0d;
+        --panel-bg: #16181c;
+        --border: #2a2d33;
+        --text: #d8dbe0;
+        --text-dim: #8b909a;
+        --accent: #6ea8ff;
+        --accent-dim: #3a5f9e;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: var(--bg); color: var(--text);
+        font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      #app { display: flex; height: 100%; }
+      #viewport { flex: 1; position: relative; min-width: 0; }
+      #viewport canvas { display: block; }
+      #sidebar {
+        width: 320px; flex: none; height: 100%; overflow-y: auto;
+        background: var(--panel-bg); border-left: 1px solid var(--border);
+        padding: 12px; display: flex; flex-direction: column; gap: 14px;
+      }
+      .section { border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+      .section h2 {
+        margin: 0 0 8px; font-size: 11px; text-transform: uppercase;
+        letter-spacing: 0.08em; color: var(--text-dim); font-weight: 600;
+      }
+      .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+      .row label { flex: none; width: 84px; color: var(--text-dim); }
+      .row input[type="range"] { flex: 1; }
+      .row input[type="number"], .row select {
+        background: #0d0f12; color: var(--text); border: 1px solid var(--border);
+        border-radius: 4px; padding: 3px 5px; font: inherit; width: 72px;
+      }
+      .row .val { width: 40px; text-align: right; color: var(--accent); }
+      button {
+        background: #22252b; color: var(--text); border: 1px solid var(--border);
+        border-radius: 4px; padding: 5px 9px; font: inherit; cursor: pointer;
+      }
+      button:hover { background: #2c3037; }
+      button.primary { background: #2d4a7c; border-color: #3a5f9e; }
+      button.primary:hover { background: #355896; }
+      #camera-presets { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; }
+      #selection-label { color: var(--accent); font-weight: 600; }
+      #demo-list { display: flex; flex-direction: column; gap: 6px; }
+      #demo-list .demo { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      #demo-list .demo .name { color: var(--text); }
+      #demo-list .demo .desc { color: var(--text-dim); font-size: 11px; }
+      #grid-map { width: 100%; background: #0d0f12; border-radius: 4px; cursor: pointer; }
+      .hint { color: var(--text-dim); font-size: 11px; margin-top: 4px; }
+      #error-banner {
+        display: none; position: absolute; top: 0; left: 0; right: 0;
+        background: #4a1d1d; color: #ffd9d9; padding: 10px 14px; z-index: 10;
+        border-bottom: 1px solid #6e2a2a; white-space: pre-wrap;
+      }
+      #camera-presets .toggle {
+        display: flex; align-items: center; gap: 4px; color: var(--text-dim);
+        background: #16181c; border: 1px solid var(--border); border-radius: 4px;
+        padding: 0 8px; cursor: pointer;
+      }
+      #sidebar-header {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 2px;
+      }
+      #sidebar-header .title {
+        font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+        color: var(--text-dim); font-weight: 600;
+      }
+      .seg { display: inline-flex; gap: 0; float: right; }
+      .seg button {
+        border-radius: 0; padding: 2px 8px; font-size: 11px; border-right: none;
+      }
+      .seg button:first-child { border-radius: 4px 0 0 4px; }
+      .seg button:last-child { border-radius: 0 4px 4px 0; border-right: 1px solid var(--border); }
+      #cellboard-wrap canvas { width: 100%; background: #0d0f12; border-radius: 4px; cursor: crosshair; touch-action: none; }
+      /* When the sidebar is detached into its own window it fills that window. */
+      body.detached-window #sidebar {
+        width: 100%; height: 100%; border-left: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewport">
+        <div id="error-banner"></div>
+        <div id="camera-presets">
+          <button data-preset="audience">audience</button>
+          <button data-preset="top">top-down</button>
+          <button data-preset="inside">inside</button>
+          <label class="toggle"><input type="checkbox" id="toggle-walls" checked> walls</label>
+        </div>
+      </div>
+      <aside id="sidebar">
+        <div id="sidebar-header">
+          <span class="title">mazesim — controls</span>
+          <button id="detach-btn" title="Open controls in a separate window">⇗ pop out</button>
+        </div>
+        <div class="section">
+          <h2>Grid map (top-down)</h2>
+          <canvas id="grid-map"></canvas>
+          <div class="hint">Click a cell to select. N is up, W is left.</div>
+        </div>
+        <div class="section" id="controls-section">
+          <h2>Panel — <span id="selection-label">none</span>
+            <span class="seg" id="ctrl-mode">
+              <button data-mode="single" class="primary">single</button>
+              <button data-mode="all">all cells</button>
+            </span>
+          </h2>
+          <div id="controls-body"></div>
+          <div id="cellboard-wrap" style="display:none">
+            <canvas id="cell-board"></canvas>
+            <div class="hint">Each tile: left bar = h (E-W, amber), right bar = v (N-S, blue) — independent. Drag up/down to set height; alt/right-click to blink.</div>
+          </div>
+        </div>
+        <div class="section">
+          <h2>Demos</h2>
+          <div id="demo-list"></div>
+        </div>
+      </aside>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
