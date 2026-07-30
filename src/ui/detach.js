@@ -31,7 +31,7 @@ export function setupDetach(sidebar, onLayoutChange) {
   }
 
   function detach() {
-    popup = window.open('', 'octave-controls', 'width=380,height=860');
+    popup = window.open('', 'mazesim-controls', 'width=380,height=860');
     if (!popup) {
       alert('Popup blocked — allow popups for this site to detach the controls.');
       popup = null;

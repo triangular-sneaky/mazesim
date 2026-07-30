@@ -27,6 +27,7 @@ function main() {
     return;
   }
 
+  try {
   const grid = new Grid(config);
   const engine = new PanelEngine(config, panels);
 
@@ -65,7 +66,33 @@ function main() {
 
   // Demos
   const player = new DemoPlayer(engine);
-  new DemoBank(document.getElementById('demo-list'), demos, player);
+
+  // Auto-cycle: play a sequence of wave/ripple demos on a repeating timer, advancing
+  // every CYCLE_INTERVAL ms and looping back to the start. Runs on load until the user
+  // manually triggers a demo (or Stop), and can be restarted via the "Cycle demos" button.
+  const CYCLE_SEQUENCE = ['wave-ns', 'wave-we', 'ripple'];
+  const CYCLE_INTERVAL = 7000;
+  let cycleTimer = null;
+  function stopCycle() {
+    if (cycleTimer !== null) { clearInterval(cycleTimer); cycleTimer = null; }
+  }
+  function startCycle() {
+    stopCycle();
+    let i = 0;
+    const step = () => {
+      const demo = demos.find((d) => d.id === CYCLE_SEQUENCE[i % CYCLE_SEQUENCE.length]);
+      if (demo) player.play(demo);
+      i++;
+    };
+    step();
+    cycleTimer = setInterval(step, CYCLE_INTERVAL);
+  }
+
+  new DemoBank(document.getElementById('demo-list'), demos, player, {
+    onManual: stopCycle,
+    onCycle: startCycle,
+  });
+  startCycle();
 
   // Camera presets
   document.querySelectorAll('#camera-presets [data-preset]').forEach((btn) => {
@@ -75,6 +102,13 @@ function main() {
   // Walls toggle
   const wallsToggle = document.getElementById('toggle-walls');
   wallsToggle.addEventListener('change', () => view.setWallsVisible(wallsToggle.checked));
+
+  // Mobile controls toggle: show/hide the overlay sidebar (button is hidden on desktop).
+  const sidebarToggle = document.getElementById('sidebar-toggle');
+  sidebarToggle.addEventListener('click', () => {
+    const open = document.body.classList.toggle('controls-open');
+    sidebarToggle.textContent = open ? '✕ close' : '☰ controls';
+  });
 
   // Detachable controls window (docked by default). Resize the 3D view on dock/detach.
   setupDetach(document.getElementById('sidebar'), () => {
@@ -97,6 +131,16 @@ function main() {
   requestAnimationFrame(frame);
 
   console.log(`mazesim: ${cells.length} cells, ${panels.length} panels loaded.`);
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (/webgl|context/i.test(msg)) {
+      fail('WebGL could not start, so the 3D view can\'t render.\n\n' +
+           'Fix: enable hardware acceleration in your browser settings (or update your GPU driver), ' +
+           'then reload. Chrome/Edge: Settings → System → "Use graphics acceleration when available".');
+    } else {
+      fail(`Init error:\n${(e && e.stack) || e}`);
+    }
+  }
 }
 
 main();
