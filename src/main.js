@@ -9,6 +9,7 @@ import { CellBoard } from './ui/cellBoard.js';
 import { DemoBank } from './ui/demoBank.js';
 import { DemoPlayer } from './demos/player.js';
 import { setupDetach } from './ui/detach.js';
+import { startAutoReload } from './ui/autoReload.js';
 
 function fail(msg) {
   const banner = document.getElementById('error-banner');
@@ -18,6 +19,10 @@ function fail(msg) {
 }
 
 function main() {
+  // Reload the tab automatically when a newer build is deployed (runs regardless of
+  // whether the 3D view initializes, so a WebGL-failed page still self-updates).
+  startAutoReload();
+
   let config, cells, panels, demos;
   try {
     ({ config, cells, panels } = loadLayout());

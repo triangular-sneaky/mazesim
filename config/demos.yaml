@@ -38,16 +38,16 @@ demos:
     name: All up
     desc: raise every panel to the top
     generator: allTo
-    params: { position: 255 }
+    params: { position: 255, velocity: 60 }
 
   - id: all-down
     name: All down
     desc: lower every panel to the floor
     generator: allTo
-    params: { position: 0 }
+    params: { position: 0, velocity: 60 }
 
   - id: rest
     name: Return to mid
     desc: send every panel to mid height
     generator: allTo
-    params: { position: 128 }
+    params: { position: 128, velocity: 60 }

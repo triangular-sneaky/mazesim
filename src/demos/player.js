@@ -148,8 +148,8 @@ const GENERATORS = {
     for (let i = 0; i < moves; i++) {
       const p = pick();
       const target = height();
-      // velocity 90..250, curve picked at random for organic feel
-      const velocity = 90 + Math.floor(Math.random() * 160);
+      // velocity 45..125, curve picked at random for organic feel
+      const velocity = 45 + Math.floor(Math.random() * 80);
       const curve = Math.random() < 0.5 ? 'linear' : 'smooth';
       const t = (i / moves) * duration + Math.random() * (duration / moves);
       actions.push({ t, run: () => engine.movePanel(p.x, p.y, p.orient, target, { velocity, curve }) });
