@@ -5,12 +5,12 @@
 # Panels are addressed in the API/UI as (x, y, orient) with 0-based cell indices.
 
 room:
-  width: 12.0    # X extent (m)
+  width: 7.0     # X extent (m) — maze is 6 cells (6 m) wide; room hugs it with 0.5 m each side
   depth: 10.0    # Z extent (m)
   height: 5.5    # Y extent (m)
 
 grid:
-  originX: 1.0   # world X of cell (0,0) NW corner
+  originX: 0.5   # world X of cell (0,0) NW corner — centers the 6 m maze in the 7 m room
   originZ: 1.0   # world Z of cell (0,0) NW corner (north edge)
   cellWidth: 1.00   # X spacing between cells (m) — equal to depth for square cube frames
   cellDepth: 1.00   # Z spacing between cells (m)
@@ -55,9 +55,11 @@ blink:
 # interior walls not duplicated), so total panels > 2x cell count.
 # North rectangular block, tapering open toward the front-right.
 layout: |
-  X X X X X X X X
-  X X X X X X X X
-  X X X X X X X .
-  X X X X X X . .
-  X X X X X . . .
-  X X X . . . . .
+  X X X X X X
+  X X X X X X
+  X X X X X X
+  X X X X X X
+  X X X X X .
+  X X X X . .
+  X X . . . .
+  X X . . . .
