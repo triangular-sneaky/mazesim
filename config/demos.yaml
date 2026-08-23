@@ -1,7 +1,7 @@
 # Demo bank — coordinated panel behaviours.
 # Each demo names a generator (implemented in src/demos/player.js) that builds a
 # timed action list from the live panel set, so demos adapt to any layout.
-# Generators: allTo | wave | ripple | sparkle | scatter
+# Generators: allTo | wave | ripple | mountain | sparkle | scatter
 
 demos:
   - id: wave-ns
@@ -21,6 +21,12 @@ demos:
     desc: radial rise from the grid center
     generator: ripple
     params: { interval: 110, up: 255, down: 120, velocity: 100 }
+
+  - id: mountain
+    name: Mountain
+    desc: static cone — peak at center, sloping to the edges
+    generator: mountain
+    params: { peak: 255, base: 30, velocity: 90 }
 
   - id: sparkle
     name: Sparkle

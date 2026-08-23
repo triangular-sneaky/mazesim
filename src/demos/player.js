@@ -115,6 +115,28 @@ const GENERATORS = {
     return actions;
   },
 
+  /**
+   * Static mountain: panels settle into a cone of heights — tallest at the field
+   * center, sloping down to the edges — then hold. No animation after arrival.
+   */
+  mountain(engine, params) {
+    const peak = params.peak ?? 255;
+    const base = params.base ?? 30;
+    const opts = params.velocity ? { velocity: params.velocity } : {};
+
+    const cells = cellsOf(engine);
+    const cx = cells.reduce((s, c) => s + c.x, 0) / cells.length;
+    const cy = cells.reduce((s, c) => s + c.y, 0) / cells.length;
+    // Normalize distance by the farthest cell so the outermost ring sits at `base`.
+    const maxD = Math.max(1, ...cells.map((c) => Math.hypot(c.x - cx, c.y - cy)));
+
+    return engine.list().map((p) => {
+      const t = Math.hypot(p.x - cx, p.y - cy) / maxD; // 0 center .. 1 edge
+      const pos = Math.round(base + (peak - base) * (1 - t));
+      return { t: 0, run: () => engine.movePanel(p.x, p.y, p.orient, pos, opts) };
+    });
+  },
+
   /** Random LED blinks scattered over time. */
   sparkle(engine, params) {
     const count = params.count ?? 80;
