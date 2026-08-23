@@ -34,11 +34,18 @@ npm run preview  # serve the built dist/ locally
 - **Orbit** the view by dragging; **camera presets** (top-left): audience / top-down / inside.
 - **walls** checkbox toggles the two white back walls.
 - **Grid map** (sidebar): click a cell to select a panel. N is up, W is left.
-- **Panel controls**: `single` mode = per-panel target/velocity/curve + blink; `all cells`
-  mode = a compact fader board (drag a tile up/down to set height; alt/right-click to blink).
+- **Panel controls**: `single` mode = per-panel target height + blink; `all cells` mode =
+  a compact fader board (drag a tile up/down to set height; alt/right-click to blink).
   Left bar = `h` (E–W, amber), right bar = `v` (N–S, blue) — independent.
-- **Demos**: Play any demo, `Cycle demos` to loop through wave/ripple, `Stop` to halt.
-  On load it auto-cycles until you trigger a demo manually.
+- **Movements**: grouped, searchable list of coordinated behaviours. `Play` one, `Cycle demos`
+  to loop wave/ripple, `Stop` to halt; on load it auto-cycles until you trigger one manually.
+- **speed**: one global cruise speed (position-units/sec) for *all* motion. It acts as a
+  **tempo** — raising it shortens each movement's period while keeping its shape/heights
+  fixed (per-panel travel and cascade timing scale together). Motion is constant-speed with
+  a slight ease in/out at the ends.
+- **Video overlay**: pick a camera and enable to composite the maze over a live feed — the
+  solid walls/floor drop to a wireframe cage so you can register it against a real room.
+  Requires camera permission and a secure context (`localhost` or the deployed https site).
 - **⇗ pop out**: detach the controls into a separate window.
 - On mobile the sidebar collapses; use the **☰ controls** button.
 
@@ -75,7 +82,7 @@ src/
   config/loader.js YAML parse + matrix -> panel list (edge-union)
   model/           grid.js, panel.js, engine.js (action API, no three.js)
   render/          scene.js, panelMesh.js
-  ui/              gridMap, controls, cellBoard, demoBank, detach, autoReload
+  ui/              gridMap, controls, cellBoard, demoBank, videoMode, detach, autoReload
   demos/player.js  runs demo timelines against the action API
 ```
 

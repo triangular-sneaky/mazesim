@@ -28,7 +28,7 @@ export class Controls {
 
   _render() {
     const { x, y, orient } = this.sel;
-    const m = this.config.motion, b = this.config.blink;
+    const b = this.config.blink;
     const panel = this.engine.get(x, y, orient);
     this.label.textContent = `(${x}, ${y}) ${orient.toUpperCase()}`;
 
@@ -43,17 +43,8 @@ export class Controls {
         <input type="range" id="c-target" min="0" max="255" step="1" value="${Math.round(panel?.position ?? 128)}">
         <span class="val" id="c-target-val">${Math.round(panel?.position ?? 128)}</span>
       </div>
-      <div class="row">
-        <label>velocity</label>
-        <input type="number" id="c-vel" min="1" max="1000" step="1" value="${m.velocity}">
-        <label style="width:auto">curve</label>
-        <select id="c-curve">
-          <option value="linear" ${m.curve === 'linear' ? 'selected' : ''}>linear</option>
-          <option value="smooth" ${m.curve === 'smooth' ? 'selected' : ''}>smooth</option>
-        </select>
-      </div>
       <div class="row"><button class="primary" id="c-move">Move</button>
-        <span class="hint">(slider moves live)</span></div>
+        <span class="hint">(slider moves live · speed set in Movements)</span></div>
       <hr style="border-color:var(--border);margin:10px 0">
       <div class="row">
         <label>attack</label><input type="number" id="c-atk" min="0" step="0.01" value="${b.attack}">
@@ -70,14 +61,10 @@ export class Controls {
       btn.addEventListener('click', () => this.select(x, y, btn.dataset.orient));
     });
 
-    // Move controls
+    // Move controls — travel speed is the global cruise speed (set in Movements).
     const target = this.body.querySelector('#c-target');
     const targetVal = this.body.querySelector('#c-target-val');
-    const vel = this.body.querySelector('#c-vel');
-    const curve = this.body.querySelector('#c-curve');
-    const doMove = () => this.engine.movePanel(x, y, orient, Number(target.value), {
-      velocity: Number(vel.value), curve: curve.value,
-    });
+    const doMove = () => this.engine.movePanel(x, y, orient, Number(target.value));
     target.addEventListener('input', () => {
       targetVal.textContent = target.value;
       doMove(); // live feedback

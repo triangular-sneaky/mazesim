@@ -7,6 +7,7 @@ import { GridMap } from './ui/gridMap.js';
 import { Controls } from './ui/controls.js';
 import { CellBoard } from './ui/cellBoard.js';
 import { DemoBank } from './ui/demoBank.js';
+import { VideoMode } from './ui/videoMode.js';
 import { DemoPlayer } from './demos/player.js';
 import { setupDetach } from './ui/detach.js';
 import { startAutoReload } from './ui/autoReload.js';
@@ -96,8 +97,19 @@ function main() {
   new DemoBank(document.getElementById('demo-list'), demos, player, {
     onManual: stopCycle,
     onCycle: startCycle,
+    searchEl: document.getElementById('move-search'),
   });
   startCycle();
+
+  // Global movement speed (cruise units/sec) — applies to every movement.
+  const speed = document.getElementById('move-speed');
+  const speedVal = document.getElementById('move-speed-val');
+  speed.value = engine.speed;
+  speedVal.textContent = engine.speed;
+  speed.addEventListener('input', () => {
+    engine.setSpeed(Number(speed.value));
+    speedVal.textContent = speed.value;
+  });
 
   // Camera presets
   document.querySelectorAll('#camera-presets [data-preset]').forEach((btn) => {
@@ -107,6 +119,24 @@ function main() {
   // Walls toggle
   const wallsToggle = document.getElementById('toggle-walls');
   wallsToggle.addEventListener('change', () => view.setWallsVisible(wallsToggle.checked));
+
+  // Video overlay: transparent scene + wireframe room over a live camera feed.
+  new VideoMode(
+    document.getElementById('bg-video'),
+    document.getElementById('toggle-video'),
+    document.getElementById('video-source'),
+    (on) => view.setVideoMode(on),
+  );
+
+  // Camera FOV — match the virtual camera's perspective to the physical one (video mode).
+  const fov = document.getElementById('video-fov');
+  const fovVal = document.getElementById('video-fov-val');
+  fov.value = view.camera.fov;
+  fovVal.textContent = view.camera.fov;
+  fov.addEventListener('input', () => {
+    view.setFov(Number(fov.value));
+    fovVal.textContent = fov.value;
+  });
 
   // Mobile controls toggle: show/hide the overlay sidebar (button is hidden on desktop).
   const sidebarToggle = document.getElementById('sidebar-toggle');

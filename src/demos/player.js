@@ -43,30 +43,38 @@ const cellsOf = (engine) => {
   return [...set.values()];
 };
 
+/**
+ * The global speed acts as a TEMPO. Generators author their intervals/durations for the
+ * engine's reference speed; multiplying those timings by this factor makes a movement's
+ * PERIOD track the speed control while its AMPLITUDE (heights) stays fixed. Faster speed
+ * → smaller factor → tighter cascade, matching the faster per-panel travel. Because every
+ * downstream time (action offsets, blink sustains, jitter) is derived from the scaled
+ * interval/duration, the whole movement compresses coherently.
+ */
+const timeScale = (engine) => engine.baseSpeed / engine.speed;
+
 const GENERATORS = {
   /** Move every panel to a single position at once. */
   allTo(engine, params) {
     const position = params.position ?? 128;
-    const opts = params.velocity ? { velocity: params.velocity } : {};
-    return [{ t: 0, run: () => engine.moveAll(position, opts) }];
+    return [{ t: 0, run: () => engine.moveAll(position) }];
   },
 
   /** Rows (axis:y) or columns (axis:x) rise to `up` in sequence, then settle to `down`. */
   wave(engine, params) {
     const axis = params.axis === 'x' ? 'x' : 'y';
-    const interval = params.interval ?? 200;
+    const interval = (params.interval ?? 200) * timeScale(engine);
     const up = params.up ?? 255;
     const down = params.down ?? 110;
-    const opts = params.velocity ? { velocity: params.velocity } : {};
 
     const glow = { attack: 0.15, sustain: (interval * 2) / 1000, decay: 0.6 };
     const lanes = [...new Set(engine.list().map((p) => p[axis]))].sort((a, b) => a - b);
     const actions = [];
     const rise = (panels, upPos) => panels.forEach((p) => {
-      engine.movePanel(p.x, p.y, p.orient, upPos, opts);
+      engine.movePanel(p.x, p.y, p.orient, upPos);
       engine.blinkPanel(p.x, p.y, p.orient, glow);
     });
-    const fall = (panels, downPos) => panels.forEach((p) => engine.movePanel(p.x, p.y, p.orient, downPos, opts));
+    const fall = (panels, downPos) => panels.forEach((p) => engine.movePanel(p.x, p.y, p.orient, downPos));
     lanes.forEach((lane, i) => {
       const inLane = engine.list().filter((p) => p[axis] === lane);
       const h = inLane.filter((p) => p.orient === 'h');
@@ -83,10 +91,9 @@ const GENERATORS = {
 
   /** Radial rise outward from the field center, then settle. */
   ripple(engine, params) {
-    const interval = params.interval ?? 110;
+    const interval = (params.interval ?? 110) * timeScale(engine);
     const up = params.up ?? 255;
     const down = params.down ?? 120;
-    const opts = params.velocity ? { velocity: params.velocity } : {};
 
     const cells = cellsOf(engine);
     const cx = cells.reduce((s, c) => s + c.x, 0) / cells.length;
@@ -97,10 +104,10 @@ const GENERATORS = {
     const glow = { attack: 0.15, sustain: (interval * 3) / 1000, decay: 0.6 };
     const actions = [];
     const rise = (panels, upPos) => panels.forEach((p) => {
-      engine.movePanel(p.x, p.y, p.orient, upPos, opts);
+      engine.movePanel(p.x, p.y, p.orient, upPos);
       engine.blinkPanel(p.x, p.y, p.orient, glow);
     });
-    const fall = (panels, downPos) => panels.forEach((p) => engine.movePanel(p.x, p.y, p.orient, downPos, opts));
+    const fall = (panels, downPos) => panels.forEach((p) => engine.movePanel(p.x, p.y, p.orient, downPos));
     rings.forEach((r, i) => {
       const inRing = engine.list().filter((p) => dist(p) === r);
       const h = inRing.filter((p) => p.orient === 'h');
@@ -122,7 +129,6 @@ const GENERATORS = {
   mountain(engine, params) {
     const peak = params.peak ?? 255;
     const base = params.base ?? 30;
-    const opts = params.velocity ? { velocity: params.velocity } : {};
 
     const cells = cellsOf(engine);
     const cx = cells.reduce((s, c) => s + c.x, 0) / cells.length;
@@ -133,14 +139,14 @@ const GENERATORS = {
     return engine.list().map((p) => {
       const t = Math.hypot(p.x - cx, p.y - cy) / maxD; // 0 center .. 1 edge
       const pos = Math.round(base + (peak - base) * (1 - t));
-      return { t: 0, run: () => engine.movePanel(p.x, p.y, p.orient, pos, opts) };
+      return { t: 0, run: () => engine.movePanel(p.x, p.y, p.orient, pos) };
     });
   },
 
   /** Random LED blinks scattered over time. */
   sparkle(engine, params) {
     const count = params.count ?? 80;
-    const interval = params.interval ?? 110;
+    const interval = (params.interval ?? 110) * timeScale(engine);
     const all = engine.list();
     const actions = [];
     for (let i = 0; i < count; i++) {
@@ -154,7 +160,7 @@ const GENERATORS = {
 
   /** Random-ish movements and blinks: panels dart to random heights while sparks fire. */
   scatter(engine, params) {
-    const duration = params.duration ?? 8000;
+    const duration = (params.duration ?? 8000) * timeScale(engine);
     const moves = params.moves ?? 60;
     const blinks = params.blinks ?? 40;
     const minPos = params.minPos ?? 0;
@@ -165,16 +171,14 @@ const GENERATORS = {
     const pick = () => all[Math.floor(Math.random() * all.length)];
     const height = () => minPos + Math.round(Math.random() * (maxPos - minPos));
 
-    // Moves: each panel darts to a random height with a varied velocity so no two
-    // move in lockstep. Times are spread across the duration with a little jitter.
+    // Moves: each panel darts to a random height. All motion uses the global
+    // cruise speed; times are spread across the duration with a little jitter so
+    // panels don't move in lockstep.
     for (let i = 0; i < moves; i++) {
       const p = pick();
       const target = height();
-      // velocity 45..125, curve picked at random for organic feel
-      const velocity = 45 + Math.floor(Math.random() * 80);
-      const curve = Math.random() < 0.5 ? 'linear' : 'smooth';
       const t = (i / moves) * duration + Math.random() * (duration / moves);
-      actions.push({ t, run: () => engine.movePanel(p.x, p.y, p.orient, target, { velocity, curve }) });
+      actions.push({ t, run: () => engine.movePanel(p.x, p.y, p.orient, target) });
     }
 
     // Blinks: random sparks scattered independently across the same window.

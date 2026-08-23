@@ -12,14 +12,17 @@ export class SceneView {
     this.grid = grid;
 
     const room = config.room;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // alpha:true lets us clear the canvas to transparent in video mode, so a live
+    // camera feed behind the (DOM) canvas shows through around the maze.
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.setClearColor(0x07080a, 1);
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0x07080a, 10, 26);
+    this._fog = new THREE.Fog(0x07080a, 10, 26);
+    this.scene.fog = this._fog;
 
     this.camera = new THREE.PerspectiveCamera(
       55, container.clientWidth / container.clientHeight, 0.1, 100,
@@ -58,6 +61,19 @@ export class SceneView {
     floor.rotation.x = -Math.PI / 2;
     floor.position.set(w / 2, 0, d / 2);
     this.scene.add(floor);
+    this.floor = floor;
+
+    // Wireframe room outline (all 12 box edges). Hidden normally; in video mode the solid
+    // floor/walls are hidden and only this edge cage is drawn, to register the virtual
+    // room against the real one in the camera feed.
+    const roomEdges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, d)),
+      new THREE.LineBasicMaterial({ color: 0x6ea8ff }),
+    );
+    roomEdges.position.set(w / 2, h / 2, d / 2);
+    roomEdges.visible = false;
+    this.scene.add(roomEdges);
+    this.roomEdges = roomEdges;
 
     // Two back walls (north at z=0, west at x=0) forming the back-left corner behind
     // the dense field. White material that reads dark under the low light. Toggleable.
@@ -96,6 +112,7 @@ export class SceneView {
     );
     piano.position.set(1.0, 0.5, d - 1.0);
     this.scene.add(piano);
+    this.piano = piano;
   }
 
   _buildLights(room) {
@@ -202,9 +219,36 @@ export class SceneView {
     this.figure = fig;
   }
 
-  /** Toggle the two back walls. */
+  /** Toggle the two back walls (remembered so video mode can restore the choice). */
   setWallsVisible(v) {
-    if (this.walls) this.walls.visible = v;
+    this._wallsWanted = v;
+    if (this.walls && !this.videoMode) this.walls.visible = v;
+  }
+
+  /**
+   * Video overlay mode. On: clear to transparent (camera feed shows through the DOM
+   * canvas behind it), drop fog, hide the solid room/decor (floor, walls, piano, figure)
+   * and draw only the wireframe room cage so the maze can be composited over a real room.
+   * Off: restore the normal dark room.
+   */
+  setVideoMode(on) {
+    this.videoMode = on;
+    this.scene.fog = on ? null : this._fog;
+    this.renderer.setClearColor(0x07080a, on ? 0 : 1);
+    if (this.floor) this.floor.visible = !on;
+    if (this.piano) this.piano.visible = !on;
+    if (this.figure) this.figure.visible = !on;
+    if (this.roomEdges) this.roomEdges.visible = on;
+    if (this.walls) this.walls.visible = on ? false : (this._wallsWanted ?? true);
+  }
+
+  /**
+   * Set the camera's vertical field-of-view (degrees). Used in video mode to match the
+   * perspective of the physical camera the maze is being overlaid onto.
+   */
+  setFov(deg) {
+    this.camera.fov = deg;
+    this.camera.updateProjectionMatrix();
   }
 
   /** Camera presets framed around the field. */

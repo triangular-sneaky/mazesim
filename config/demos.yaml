@@ -1,59 +1,73 @@
-# Demo bank — coordinated panel behaviours.
-# Each demo names a generator (implemented in src/demos/player.js) that builds a
-# timed action list from the live panel set, so demos adapt to any layout.
+# Movement bank — coordinated panel behaviours.
+# Each movement names a generator (implemented in src/demos/player.js) that builds
+# a timed action list from the live panel set, so it adapts to any layout.
 # Generators: allTo | wave | ripple | mountain | sparkle | scatter
+#
+# `group` organizes movements in the UI (with search). The built-in set below is
+# the "Demos" group; add new movements with any `group:` to create more sections.
+# NOTE: travel speed is global (set live in the UI) — movements no longer carry a
+# per-movement velocity; timing/cascade comes from each generator's `interval`.
 
 demos:
   - id: wave-ns
     name: Wave (N→S)
     desc: rows rise then settle, north to south
+    group: Demos
     generator: wave
-    params: { axis: y, interval: 200, up: 255, down: 110, velocity: 90 }
+    params: { axis: y, interval: 200, up: 255, down: 110 }
 
   - id: wave-we
     name: Wave (W→E)
     desc: columns rise then settle, west to east
+    group: Demos
     generator: wave
-    params: { axis: x, interval: 200, up: 255, down: 110, velocity: 90 }
+    params: { axis: x, interval: 200, up: 255, down: 110 }
 
   - id: ripple
     name: Ripple
     desc: radial rise from the grid center
+    group: Demos
     generator: ripple
-    params: { interval: 110, up: 255, down: 120, velocity: 100 }
+    params: { interval: 110, up: 255, down: 120 }
 
   - id: mountain
     name: Mountain
     desc: static cone — peak at center, sloping to the edges
+    group: Demos
     generator: mountain
-    params: { peak: 255, base: 30, velocity: 90 }
+    params: { peak: 255, base: 30 }
 
   - id: sparkle
     name: Sparkle
     desc: random LED blinks across the field
+    group: Demos
     generator: sparkle
     params: { count: 80, interval: 110 }
 
   - id: scatter
     name: Scatter
     desc: random-ish panel movements and blinks
+    group: Demos
     generator: scatter
     params: { duration: 8000, moves: 60, blinks: 40, minPos: 0, maxPos: 255 }
 
   - id: all-up
     name: All up
     desc: raise every panel to the top
+    group: Demos
     generator: allTo
-    params: { position: 255, velocity: 60 }
+    params: { position: 255 }
 
   - id: all-down
     name: All down
     desc: lower every panel to the floor
+    group: Demos
     generator: allTo
-    params: { position: 0, velocity: 60 }
+    params: { position: 0 }
 
   - id: rest
     name: Return to mid
     desc: send every panel to mid height
+    group: Demos
     generator: allTo
-    params: { position: 128, velocity: 60 }
+    params: { position: 128 }
