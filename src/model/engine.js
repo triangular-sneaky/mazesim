@@ -85,6 +85,38 @@ export class PanelEngine {
     }
   }
 
+  /**
+   * Synchronized "sweep": move a set of panels so they ALL ARRIVE at the same instant,
+   * each traveling at the single global speed. Panels with less distance to cover start
+   * later (a staggered delay) and "join in", so the group levels together — without any
+   * panel ever moving at a non-global speed (only the start times differ).
+   * @param {{x:number,y:number,orient:'h'|'v',target:number}[]} moves
+   * @param {{ease?:number}} [opts]
+   */
+  sweepTo(moves, opts = {}) {
+    const ease = opts.ease ?? this.ease;
+    const rate = this.speed * (1 - ease); // effective units/sec used for the duration
+    const plan = [];
+    let maxDur = 0;
+    for (const m of moves) {
+      const p = this.get(m.x, m.y, m.orient);
+      if (!p) continue;
+      const target = Math.min(255, Math.max(0, m.target));
+      const dur = rate > 0 ? Math.abs(target - p.position) / rate : 0;
+      plan.push({ p, target, dur });
+      if (dur > maxDur) maxDur = dur;
+    }
+    // Delay each move so every panel finishes at maxDur (the longest single move).
+    for (const { p, target, dur } of plan) {
+      p.moveTo(target, this.speed, ease, maxDur - dur);
+    }
+  }
+
+  /** Sweep every panel to one target, all arriving together (see sweepTo). */
+  sweepAll(targetPosition, opts = {}) {
+    this.sweepTo(this.list().map((p) => ({ x: p.x, y: p.y, orient: p.orient, target: targetPosition })), opts);
+  }
+
   // ---- Clock -----------------------------------------------------------------
 
   tick(dt) {

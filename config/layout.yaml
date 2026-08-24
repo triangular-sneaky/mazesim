@@ -7,7 +7,7 @@
 room:
   width: 7.0     # X extent (m) — maze is 6 cells (6 m) wide; room hugs it with 0.5 m each side
   depth: 10.0    # Z extent (m)
-  height: 5.5    # Y extent (m)
+  height: 4.0    # Y extent (m)
 
 grid:
   originX: 0.5   # world X of cell (0,0) NW corner — centers the 6 m maze in the 7 m room
@@ -27,10 +27,10 @@ panel:
 # All motion is constant sustained speed with a slight ease-in/out at the ends.
 motion:
   travelMin: 0.80   # world Y of panel center at position 0 (near floor)
-  travelMax: 4.10   # world Y of panel center at position 255 (near ceiling)
+  travelMax: 3.60   # world Y of panel center at position 255 (just below the 3.85 m rail)
   restPosition: 255 # initial position on load (all up)
-  velocity: 55      # cruise speed (position-units/sec) — global default, adjustable live in the UI
-  ease: 0.15        # ramp fraction at each end (0 = pure constant speed, 0.5 = full ease)
+  velocity: 25      # cruise speed (position-units/sec) — global default, adjustable live in the UI
+  ease: 0.25        # ramp fraction at each end (0 = pure constant speed, 0.5 = full ease)
   tempoReference: 120 # speed at which movement intervals play literally; timing scales
                       # inversely with `velocity` so movements keep their shape at any speed
 

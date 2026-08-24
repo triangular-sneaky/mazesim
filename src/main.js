@@ -7,6 +7,7 @@ import { GridMap } from './ui/gridMap.js';
 import { Controls } from './ui/controls.js';
 import { CellBoard } from './ui/cellBoard.js';
 import { DemoBank } from './ui/demoBank.js';
+import { PrisonMode } from './ui/prisonMode.js';
 import { VideoMode } from './ui/videoMode.js';
 import { DemoPlayer } from './demos/player.js';
 import { setupDetach } from './ui/detach.js';
@@ -94,10 +95,14 @@ function main() {
     cycleTimer = setInterval(step, CYCLE_INTERVAL);
   }
 
+  // Interactive movements (live controllers instead of timelines), keyed by movement id.
+  const prison = new PrisonMode(engine, cells, config);
+
   new DemoBank(document.getElementById('demo-list'), demos, player, {
     onManual: stopCycle,
     onCycle: startCycle,
     searchEl: document.getElementById('move-search'),
+    controllers: { prison },
   });
   startCycle();
 
@@ -126,6 +131,8 @@ function main() {
     document.getElementById('toggle-video'),
     document.getElementById('video-source'),
     (on) => view.setVideoMode(on),
+    document.getElementById('video-adjust'),
+    (lock) => { view.controls.enabled = !lock; }, // lock the maze while adjusting the video
   );
 
   // Camera FOV — match the virtual camera's perspective to the physical one (video mode).
@@ -156,6 +163,7 @@ function main() {
     const dt = Math.min((now - last) / 1000, 0.1); // clamp big gaps
     last = now;
     engine.tick(dt);
+    prison.tick(dt); // drives caged panels directly; no-op unless its controls are open
     meshes.sync();
     gridMap.draw();
     cellBoard.draw();

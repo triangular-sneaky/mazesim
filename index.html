@@ -22,7 +22,7 @@
         font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
       }
       #app { display: flex; height: 100%; }
-      #viewport { flex: 1; position: relative; min-width: 0; }
+      #viewport { flex: 1; position: relative; min-width: 0; overflow: hidden; }
       #viewport canvas { display: block; }
       #sidebar {
         width: 320px; flex: none; height: 100%; overflow-y: auto;
@@ -73,6 +73,10 @@
       #demo-list .demo-group .grp-count {
         margin-left: auto; color: var(--text-dim);
         background: #0d0f12; border: 1px solid var(--border); border-radius: 8px; padding: 0 6px;
+      }
+      #demo-list .demo-controls { margin: 2px 0 8px; }
+      #demo-list .prison-board {
+        width: 100%; background: #0d0f12; border-radius: 4px; cursor: pointer; display: block;
       }
       #movements-section .search {
         width: 100%; background: #0d0f12; color: var(--text); border: 1px solid var(--border);
@@ -179,17 +183,27 @@
             <input type="checkbox" id="toggle-video">
           </div>
           <div class="row">
-            <label>camera</label>
-            <select id="video-source" style="flex:1;width:auto"></select>
+            <label>source</label>
+            <select id="video-source" style="flex:1;width:auto">
+              <option value="">Camera</option>
+              <option value="__file__">Video file…</option>
+            </select>
           </div>
           <div class="row">
             <label>fov</label>
             <input type="range" id="video-fov" min="20" max="120" step="1">
             <span class="val" id="video-fov-val">—</span>
           </div>
+          <div class="row">
+            <label>adjust</label>
+            <input type="checkbox" id="video-adjust">
+            <span class="hint" style="margin:0">scroll = zoom, drag = pan, dbl-click = reset</span>
+          </div>
           <div class="hint">Composites the maze over a live camera feed — solid walls/floor
-            become a wireframe cage. Grant camera access when prompted. Adjust <b>fov</b>
-            (vertical field of view) to match the physical camera's perspective.</div>
+            become a wireframe cage. Grant camera access when prompted, or pick
+            <b>Video file…</b> to overlay onto an uploaded clip instead. Adjust <b>fov</b>
+            (vertical field of view) to match the source's perspective. Tick <b>adjust</b>
+            to zoom/pan the video with the mouse (the maze view is locked while it's on).</div>
         </div>
       </aside>
     </div>

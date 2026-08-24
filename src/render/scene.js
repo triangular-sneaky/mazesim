@@ -111,7 +111,7 @@ export class SceneView {
       new THREE.MeshStandardMaterial({ color: 0x0c0c0e, roughness: 0.6 }),
     );
     piano.position.set(1.0, 0.5, d - 1.0);
-    this.scene.add(piano);
+    // this.scene.add(piano); // hidden for now
     this.piano = piano;
   }
 

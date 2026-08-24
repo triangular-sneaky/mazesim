@@ -44,6 +44,7 @@ export class Panel {
     this._elapsed = 0;             // s since move began
     this._duration = 0;            // s for current move (0 = idle/snapped)
     this._ease = 0.15;             // ramp fraction at each end for this move
+    this._delay = 0;               // s to wait (holding still) before the move begins
     this.moving = false;
 
     // Blink (LED) state — brightness is the 0..1 overlay above the panel's base glow.
@@ -59,14 +60,21 @@ export class Panel {
    * @param {number} velocity cruise speed, position-units / second (>0)
    * @param {number} ease ramp fraction at each end (0..0.5)
    */
-  moveTo(target, velocity, ease = 0.15) {
+  moveTo(target, velocity, ease = 0.15, delay = 0) {
     this._target = clamp(target, 0, 255);
     this._start = this.position;
     this._ease = clamp(ease, 0, 0.5);
+    this._delay = Math.max(0, delay);
     const distance = Math.abs(this._target - this._start);
     if (velocity > 0 && distance > 0) {
       // Scale duration so the cruise segment runs at exactly `velocity`.
       this._duration = distance / (velocity * (1 - this._ease));
+      this._elapsed = 0;
+      this.moving = true;
+    } else if (this._delay > 0) {
+      // No distance but a pending delay: stay "moving" (so group barriers wait) yet hold
+      // in place until the delay elapses, then snap.
+      this._duration = 0;
       this._elapsed = 0;
       this.moving = true;
     } else {
@@ -95,13 +103,18 @@ export class Panel {
   tick(dt) {
     // Motion
     if (this.moving) {
-      this._elapsed += dt;
-      const t = this._duration > 0 ? clamp(this._elapsed / this._duration, 0, 1) : 1;
-      const eased = easeSustain(t, this._ease);
-      this.position = this._start + (this._target - this._start) * eased;
-      if (t >= 1) {
-        this.position = this._target;
-        this.moving = false;
+      if (this._delay > 0) {
+        // Staggered start: hold still until the delay elapses (used by synchronized sweeps).
+        this._delay -= dt;
+      } else {
+        this._elapsed += dt;
+        const t = this._duration > 0 ? clamp(this._elapsed / this._duration, 0, 1) : 1;
+        const eased = easeSustain(t, this._ease);
+        this.position = this._start + (this._target - this._start) * eased;
+        if (t >= 1) {
+          this.position = this._target;
+          this.moving = false;
+        }
       }
     }
 
