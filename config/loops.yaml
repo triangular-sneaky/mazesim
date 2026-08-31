@@ -1,0 +1,113 @@
+# Loops — cell BLOCKS that move in unison.
+#
+# Each entry defines a `blocks` matrix in the SAME glyph-per-column style as the
+# layout matrix in layout.yaml (row 0 = north/back, column 0 = west/left; spaces are
+# only for readability). But here each glyph is a BLOCK ID: every cell sharing the
+# same glyph belongs to one block and moves as a single slab. '.' or space = a cell
+# that is not part of any block (skipped).
+#
+# Block ids can be any single character (digits 1-9, letters a-z). 'x'/'X' are reserved:
+# like '.', they mark cells in no block (occupied-but-unassigned).
+#
+# CHOREOGRAPHY (blocks-descending generator):
+#   - activate:   sweep DOWN to `downPos` in unison, LED lit up from 0 to full.
+#   - deactivate: LED snaps off (fast 50 ms fade) as it starts, then sweeps all the way UP.
+# Shared borders follow their current owner (the block that last activated over them):
+# lit + down while owned-and-active, rising with the owner as it deactivates,
+# until an activating block MEETS and STEALS them (lit + down again, now owned by stealer).
+#
+# Movement defaults live in blocks-descending: below — all entries inherit them.
+# Add `params:` to an entry to override individual keys for that entry only.
+
+blocks-descending:
+  downPos: 109           # activated height — 109 ≈ mid-room (room.height/2 at default layout)
+  upPos: 255             # deactivated height (top)
+  cycles: 100             # how many full rounds through all blocks
+  deactivationDelay: 0   # ms from activation end to that block's deactivation
+  activationDelay: 0     # ms from activation end to the NEXT block's activation
+  activateBlink:         # LED envelope as the block descends and holds down
+    attack: 0.3          #   s — ramp up from 0 to full brightness
+    sustain: 3600        #   s — hold (effectively infinite while block is active)
+    decay: 0             #   s
+    peak: 1.0
+  deactivateBlink:       # LED envelope the instant the block starts rising
+    attack: 0            #   s — no ramp; start at peak immediately
+    sustain: 0           #   s
+    decay: 0.05          #   s — snap off in 50 ms so rising blocks are dark almost immediately
+    peak: 1.0
+
+blocks-on:
+  generator: blocks-descending   # reuses the same generator, just with different params
+  downPos: 109           # activated height — 109 ≈ mid-room (room.height/2 at default layout)
+  upPos: 255             # deactivated height (top)
+  cycles: 100             # how many full rounds through all blocks
+  deactivationDelay: 0   # ms from activation end to that block's deactivation
+  activationDelay: 0     # ms from activation end to the NEXT block's activation
+  activateBlink:         # LED envelope as the block descends and holds down
+    attack: 0.3          #   s — ramp up from 0 to full brightness
+    sustain: 3600        #   s — hold (effectively infinite while block is active)
+    decay: 0             #   s
+    peak: 1.0
+  deactivateBlink:       # LED envelope the instant the block starts rising
+    attack: 0            #   s — no ramp; start at peak immediately
+    sustain: 3600          #   s
+    decay: 0          #   s — snap off in 50 ms so rising blocks are dark almost immediately
+    peak: 1.0
+
+
+loops:
+  - id: loop-odd-even
+    behavior: blocks-descending
+    name: Blocks — odd and even
+    desc: 2 sparse blocks — odd and even columns, interleaved
+    blocks: |
+      1 2 1 2 1 2
+      1 2 1 2 1 2
+      1 2 1 2 1 2
+      1 2 1 2 1 2
+      1 2 1 2 1 .
+      x x x x . .
+      x x . . . .
+      x x . . . .
+
+  - id: loop-pillars-descending
+    behavior: blocks-descending
+    name: Blocks — pillars descending
+    desc: 2x2 pillars
+    blocks: |
+      1 1 x 2 2 x
+      1 1 x 2 2 x
+      x x x x x x
+      2 2 x 1 1 x
+      2 2 x 1 1 .
+      x x x x . .
+      x x . . . .
+      x x . . . .
+
+  - id: loop-pillars-on
+    behavior: blocks-on
+    name: Blocks — pillars ON
+    desc: 2x2 pillars
+    blocks: |
+      1 1 x 2 2 x
+      1 1 x 2 2 x
+      x x x x x x
+      2 2 x 1 1 x
+      2 2 x 1 1 .
+      x x x x . .
+      x x . . . .
+      x x . . . .
+
+  - id: loop-bands
+    behavior: blocks-descending
+    name: Blocks — bands
+    desc: four blocks stacked north to south, each moving as one slab
+    blocks: |
+      1 1 1 1 1 1
+      1 1 1 1 1 1
+      2 2 2 2 2 2
+      2 2 2 2 2 2
+      3 3 3 3 3 .
+      3 3 3 3 . .
+      4 4 . . . .
+      4 4 . . . .

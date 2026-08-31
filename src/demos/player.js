@@ -53,7 +53,7 @@ const cellsOf = (engine) => {
  */
 const timeScale = (engine) => engine.baseSpeed / engine.speed;
 
-const GENERATORS = {
+export const GENERATORS = {
   /**
    * Move every panel to a single position at once. With `lightsOff: true`, also
    * extinguish every LED — a zero-peak blink replaces any held-on envelope (e.g. the
@@ -245,6 +245,159 @@ const GENERATORS = {
       }
       // As this panel lands, settle its light to the static on/off pattern (and end any pulse).
       actions.push({ t: finish, run: () => engine.blinkPanel(p.x, p.y, p.orient, lit ? litHold : darkHold) });
+    }
+    return actions;
+  },
+
+  /**
+   * blocks-descending: cell BLOCKS activate one after another. Each block (a group of cells sharing a
+   * glyph in loops.yaml) moves as one slab — all its edge panels sweep together, every
+   * panel still traveling at the global speed (via sweepTo). One block's cycle is:
+   *   - ACTIVATE:   sweep DOWN to the mid-room height in unison, LED lit up from 0 to full.
+   *   - DEACTIVATE: LED snaps off (fast 50 ms fade) as it starts, then sweeps all the way UP.
+   * Blocks are stepped through in order, wrapping for `cycles` rounds, so with two blocks
+   * they alternate. Two configurable delays shape the timing (both default 0), measured
+   * from a block's ACTIVATION END:
+   *   - deactivationDelay: activation end -> that block's deactivation begins.
+   *   - activationDelay:   activation end -> the NEXT block's activation begins.
+   * With both 0, each block deactivates exactly as the next activates (a clean handoff).
+   *
+   * A cell (x,y) is enclosed by 4 edge panels (edge-union model): h(x,y) north,
+   * h(x,y+1) south, v(x,y) west, v(x+1,y) east. Panels on a boundary between two blocks
+   * are shared; a shared wall FOLLOWS its current owner — the block that last activated
+   * over it. While that owner is activated the wall is down + lit; when the owner
+   * deactivates the wall rises + dims WITH it, until an activating block meets and STEALS
+   * it (down + lit again, now owned by the stealer). An activating block therefore always
+   * wins a contested wall: we emit ALL deactivations before ALL activations so an
+   * activation fires LAST at any equal-timestamp handoff and wins (last-writer).
+   *
+   * Range is limited to [top .. mid-room-height]: an activated block drops only to the
+   * world height equal to half the room's height, not to the floor.
+   *
+   * Only START times are scheduled; travel is always at the global speed. The range
+   * travel time (used to place the schedule) is measured from the current speed.
+   *
+   * @param params.groups  [{ block, cells:[{x,y}] }]  from loadLoops()
+   * @param params.downPos  activated height (default = mid-room height)
+   * @param params.upPos    deactivated height (default 255, all the way up)
+   * @param params.deactivationDelay  ms; activation end -> deactivation begin (default 0)
+   * @param params.activationDelay    ms; activation end -> next activation begin (default 0)
+   * @param params.cycles   times to run through all blocks (default 4)
+   */
+  'blocks-descending'(engine, params) {
+    const groups = params.groups || [];
+    // Limit the motion range to [top .. mid-room]: an activated block drops only to the
+    // panel position whose world height is half the room height (inverse of Grid.heightFor).
+    const room = engine.config.room;
+    const m = engine.config.motion;
+    const posForHeight = (yWorld) => {
+      const f = (yWorld - m.travelMin) / (m.travelMax - m.travelMin);
+      return Math.max(0, Math.min(255, Math.round(f * 255)));
+    };
+    const downPos = params.downPos ?? posForHeight(room.height / 2);
+    const upPos = params.upPos ?? 255;
+    const deactDelay = params.deactivationDelay ?? 0;
+    const nextDelay = params.activationDelay ?? 0;
+    const cycles = params.cycles ?? 4;
+
+    const edgesOf = ({ x, y }) => [
+      { x, y, orient: 'h' },
+      { x, y: y + 1, orient: 'h' },
+      { x, y, orient: 'v' },
+      { x: x + 1, y, orient: 'v' },
+    ];
+
+    // Resolve each block's unique, existing edge panels once.
+    const blockPanels = groups.map((g) => {
+      const seen = new Set();
+      const panels = [];
+      for (const c of g.cells) {
+        for (const e of edgesOf(c)) {
+          const key = `${e.x},${e.y},${e.orient}`;
+          if (seen.has(key) || !engine.get(e.x, e.y, e.orient)) continue;
+          seen.add(key);
+          panels.push(e);
+        }
+      }
+      return panels;
+    });
+
+    // Full-range travel time at the global speed — used only to place the schedule.
+    const rate = engine.speed * (1 - engine.ease);
+    const fullTravelMs = rate > 0 ? (Math.abs(upPos - downPos) / rate) * 1000 : 0;
+
+    // LED envelopes — configurable from YAML (activateBlink / deactivateBlink).
+    const litHold = { attack: 0.3, sustain: 3600, decay: 0,    peak: 1.0, ...(params.activateBlink   ?? {}) };
+    const dim      = { attack: 0,   sustain: 0,    decay: 0.05, peak: 1.0, ...(params.deactivateBlink ?? {}) };
+
+    const n = groups.length;
+    if (n === 0) return [];
+
+    // ---- Shared walls: the "teepee" handoff -----------------------------------
+    // A wall on the boundary between two blocks belongs to two blocks. When block A
+    // deactivates (rises + dims) at the same moment block B activates (descends + lit),
+    // that shared wall must NOT snap straight down with B. It "dims and goes UP" with A
+    // until "met by the activating block at the same height" — because both blocks travel
+    // at the same global rate from opposite ends starting together, they cross at the mid
+    // height exactly halfway through the range travel. At that meeting B STEALS the wall
+    // (re-lit) and carries it back down, arriving with the rest of B's slab. The wall thus
+    // traces an inverted-V: DOWN -> MID over the first half, MID -> DOWN over the second.
+    //
+    // We schedule this explicitly rather than leaning on tie-breaking:
+    //   - A's deactivation sweeps ALL A's panels UP (contested ones start rising too).
+    //   - B's activation sweeps B's panels DOWN, EXCLUDING the wall it shares with A.
+    //   - A separate "steal" fires half a range-travel later, sweeping just the shared
+    //     wall DOWN (from the mid height it has reached) so it lands with B's slab.
+    // No shared wall is ever commanded by two sweeps at the same instant, so ordering of
+    // the returned actions is irrelevant.
+    const key = (p) => `${p.x},${p.y},${p.orient}`;
+    const blockKeys = blockPanels.map((ps) => new Set(ps.map(key)));
+    // Panels block `a` shares with block `b` (empty for a===b or a missing neighbour).
+    const sharedBetween = (a, b) => {
+      if (a == null || b == null || a === b) return [];
+      return blockPanels[a].filter((p) => blockKeys[b].has(key(p)));
+    };
+
+    // Activation start time of each step (delays measured from activation END).
+    const N = n * cycles;
+    const actStart = [];
+    let t = 0;
+    for (let s = 0; s < N; s++) { actStart[s] = t; t = actStart[s] + fullTravelMs + nextDelay; }
+    const deactStart = (s) => actStart[s] + fullTravelMs + deactDelay;
+    // The rising wall and the descending stealer start together and move at the same rate,
+    // so they meet at the mid height exactly half a range-travel after the deactivation begins.
+    const stealAfter = fullTravelMs / 2;
+
+    const sweep = (panels, target, env) => () => {
+      engine.sweepTo(panels.map((p) => ({ ...p, target })));
+      panels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, env));
+    };
+
+    const actions = [];
+    for (let s = 0; s < N; s++) {
+      const cur = s % n;
+      const panels = blockPanels[cur];
+      const prev = s > 0 ? (s - 1) % n : null;         // block deactivating as `cur` activates
+      const next = s + 1 < N ? (s + 1) % n : null;     // block activating as `cur` deactivates
+
+      // Walls `cur` shares with the block it takes over FROM: those are mid-air being handed
+      // to us; we don't grab them in the activation sweep — the earlier owner's steal does.
+      const inherited = new Set(sharedBetween(cur, prev).map(key));
+      const activateSet = panels.filter((p) => !inherited.has(key(p)));
+
+      // Activate: sweep our (non-inherited) panels down to the mid-room height, lit.
+      actions.push({ t: actStart[s], run: sweep(activateSet, downPos, litHold) });
+
+      // Deactivate: sweep ALL our panels up, dimming as they rise. Any wall we share with
+      // the NEXT block will be overridden mid-rise by that block's steal (below).
+      actions.push({ t: deactStart(s), run: sweep(panels, upPos, dim) });
+
+      // Steal: half a range-travel into our deactivation, the next block meets our shared
+      // wall at the mid height and pulls it back down (re-lit), landing with its slab.
+      const handoff = sharedBetween(cur, next);
+      if (handoff.length) {
+        actions.push({ t: deactStart(s) + stealAfter, run: sweep(handoff, downPos, litHold) });
+      }
     }
     return actions;
   },

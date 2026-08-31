@@ -1,4 +1,4 @@
-import { loadLayout, loadDemos } from './config/loader.js';
+import { loadLayout, loadDemos, loadLoops } from './config/loader.js';
 import { Grid } from './model/grid.js';
 import { PanelEngine } from './model/engine.js';
 import { SceneView } from './render/scene.js';
@@ -25,13 +25,25 @@ function main() {
   // whether the 3D view initializes, so a WebGL-failed page still self-updates).
   startAutoReload();
 
-  let config, cells, panels, demos;
+  let config, cells, panels, demos, loops;
   try {
     ({ config, cells, panels } = loadLayout());
     demos = loadDemos();
+    loops = loadLoops();
   } catch (e) {
     fail(`Config error:\n${e.message}`);
     return;
+  }
+
+  // Each loops.yaml entry becomes a movement (generator `loop`) under a "Loops" group,
+  // placed right after the Transition group.
+  const loopDemos = loops.map((lp) => ({
+    id: lp.id, name: lp.name, desc: lp.desc, group: 'Loops',
+    generator: lp.generator, params: { groups: lp.groups, ...lp.params },
+  }));
+  if (loopDemos.length) {
+    const after = demos.findIndex((d) => (d.group || 'Demos') !== 'Transition');
+    demos.splice(after < 0 ? demos.length : after, 0, ...loopDemos);
   }
 
   try {
@@ -103,8 +115,12 @@ function main() {
     onCycle: startCycle,
     searchEl: document.getElementById('move-search'),
     controllers: { prison },
+    collapsed: ['Demos'], // the Demos section starts collapsed
   });
-  startCycle();
+  // On load, settle into the "All up" transition (panels up, lights off) rather than
+  // auto-cycling demos. The cycle is still available via the "Cycle demos" button.
+  const startup = demos.find((d) => d.id === 'all-up');
+  if (startup) player.play(startup);
 
   // Global movement speed (cruise units/sec) — applies to every movement.
   const speed = document.getElementById('move-speed');

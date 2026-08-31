@@ -13,6 +13,7 @@
  *   a movement (used to cancel the auto-cycle).
  * @param {() => void} [opts.onCycle]  called when the user clicks "Cycle demos".
  * @param {HTMLInputElement} [opts.searchEl]  search field that filters the list.
+ * @param {string[]} [opts.collapsed]  group names to start collapsed (user can still toggle).
  * @param {Object<string, {el: HTMLElement, setActive: (on:boolean)=>void}>} [opts.controllers]
  *   controllers for interactive movements, keyed by movement id.
  */
@@ -27,7 +28,7 @@ export class DemoBank {
     this.controllers = opts.controllers || {};
 
     this._filter = '';
-    this._collapsed = new Set(); // group names collapsed by the user
+    this._collapsed = new Set(opts.collapsed || []); // group names collapsed (seeded, then toggled by the user)
     this._open = new Set();       // interactive movement ids with controls expanded
 
     if (this.searchEl) {

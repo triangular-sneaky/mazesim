@@ -143,7 +143,7 @@ export class SceneView {
     for (const [fx, fz] of spots) {
       const x = b.minX + fx * (b.maxX - b.minX);
       const z = b.minZ + fz * (b.maxZ - b.minZ);
-      const fixture = new THREE.PointLight(0xffd9a8, 6, 9, 2);
+      const fixture = new THREE.PointLight(0xffd9a8, 4.8, 9, 2); // 20% dimmer than the original 6
       fixture.position.set(x, ceilY, z);
       this.scene.add(fixture);
       // tiny visible bulb
@@ -157,9 +157,10 @@ export class SceneView {
   }
 
   _buildFigure(room) {
-    // A static, stylized standing figure — an East Asian woman — placed on the open
-    // floor near the west wall, facing into the room toward the panel field. Purely
-    // decorative: a handful of cheap primitives grouped so it stays performant.
+    // A static, stylized SEATED figure — an East Asian woman — sitting in the middle of
+    // cell (2,2) (0-based from top-left) under the panel field, facing into the room.
+    // Purely decorative: a handful of cheap primitives grouped so it stays performant.
+    // Local model faces +Z (front); the group is rotated so she faces into the room (+X).
     const fig = new THREE.Group();
 
     // Shared low-poly materials.
@@ -167,54 +168,66 @@ export class SceneView {
     const hair = new THREE.MeshStandardMaterial({ color: 0x14100d, roughness: 0.6, metalness: 0.0 });
     const dress = new THREE.MeshStandardMaterial({ color: 0x8f3f52, roughness: 0.85, metalness: 0.0 });
 
-    // Legs — two slim cylinders from floor to hip (~0.8m).
+    const seat = 0.45; // hip/seat height (m), as if sitting on a low stool
+
+    // Thighs — horizontal, from the hips forward (+Z) to the knees, at seat height.
     for (const dx of [-0.09, 0.09]) {
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.045, 0.8, 8), skin);
-      leg.position.set(dx, 0.4, 0);
-      fig.add(leg);
+      const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.055, 0.42, 8), skin);
+      thigh.rotation.x = Math.PI / 2; // lay the cylinder along +Z
+      thigh.position.set(dx, seat, 0.21);
+      fig.add(thigh);
     }
 
-    // Skirt — a cone flaring from the hips, hem at knee level (~0.5m to ~0.9m).
-    const skirt = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.55, 12), dress);
-    skirt.position.set(0, 0.75, 0);
+    // Shins — vertical, from the knees down to the feet.
+    for (const dx of [-0.09, 0.09]) {
+      const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.45, 8), skin);
+      shin.position.set(dx, seat - 0.225, 0.42);
+      fig.add(shin);
+    }
+
+    // Skirt — dress fabric draped over the lap (a low, wide cone stretched over the thighs).
+    const skirt = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.26, 12), dress);
+    skirt.position.set(0, seat + 0.05, 0.12);
+    skirt.scale.set(1.0, 1.0, 1.3);
     fig.add(skirt);
 
-    // Torso — a capsule for the upper body (hips ~0.85m to shoulders ~1.35m).
+    // Torso — a capsule for the upper body, rising from the hips to the shoulders.
     const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.13, 0.34, 4, 8), dress);
-    torso.position.set(0, 1.1, 0);
+    torso.position.set(0, seat + 0.27, 0); // ~0.72m
     fig.add(torso);
 
-    // Arms — slim capsules resting at the sides, angled slightly outward.
+    // Arms — slim capsules angled forward to rest on the lap.
     for (const dx of [-1, 1]) {
-      const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.4, 4, 8), skin);
-      arm.position.set(dx * 0.19, 1.12, 0);
-      arm.rotation.z = dx * 0.12;
+      const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.34, 4, 8), skin);
+      arm.position.set(dx * 0.18, seat + 0.24, 0.12);
+      arm.rotation.x = 0.9;         // angle forward-down toward the lap
+      arm.rotation.z = dx * 0.1;
       fig.add(arm);
     }
 
     // Neck — short cylinder bridging shoulders to head.
     const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.08, 8), skin);
-    neck.position.set(0, 1.42, 0);
+    neck.position.set(0, seat + 0.57, 0); // ~1.02m
     fig.add(neck);
 
-    // Head — sphere with skin tone (~1.55m).
+    // Head — sphere with skin tone (~1.13m seated).
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), skin);
-    head.position.set(0, 1.55, 0);
+    head.position.set(0, seat + 0.68, 0);
     fig.add(head);
 
     // Hair — a slightly larger dark half-sphere cap plus a bun at the back.
     const cap = new THREE.Mesh(new THREE.SphereGeometry(0.108, 16, 12), hair);
-    cap.position.set(0, 1.57, -0.01);
+    cap.position.set(0, seat + 0.70, -0.01);
     cap.scale.set(1.0, 1.05, 1.05);
     fig.add(cap);
     const bun = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10), hair);
-    bun.position.set(0, 1.55, -0.11);
+    bun.position.set(0, seat + 0.68, -0.11);
     fig.add(bun);
 
-    // Position on the floor near the west wall, in the open front-left space, turned to
-    // face across the room toward the panel field (roughly +X / into the room).
-    fig.position.set(1.2, 0, room.depth * 0.6);
-    fig.rotation.y = Math.PI / 2; // face +X, away from the west wall, into the room
+    // Sit in the middle of cell (2,2), facing into the room (+X).
+    const nw = this.grid.cellNW(2, 2);
+    fig.position.set(nw.x + this.grid.cellWidth / 2, 0, nw.z + this.grid.cellDepth / 2);
+    fig.rotation.y = Math.PI / 2; // local +Z front -> +X, into the room
     this.scene.add(fig);
     this.figure = fig;
   }

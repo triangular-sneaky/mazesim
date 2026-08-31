@@ -13,6 +13,9 @@ export class PanelMeshes {
     this.baseEmissive = config.panel.baseEmissive ?? 0.0; // off panels emit nothing
     this.glowRange = 1.6;       // emissive added at full blink brightness
     this.emissiveColor = config.panel.emissive ?? '#fff1d6';
+    // Diffuse color hit by room lights when a panel is OFF (emissive glow ignores this).
+    // Darken in layout.yaml to widen the on/off contrast without touching the glow.
+    this.panelColor = new THREE.Color(config.panel.color ?? '#fff6e8');
 
     /** @type {Map<string,{mesh:THREE.Mesh, line:THREE.Line, panel:object}>} */
     this.items = new Map();
@@ -37,7 +40,7 @@ export class PanelMeshes {
     const pl = this.grid.placement(panel);
     const geo = new THREE.BoxGeometry(pl.size.x, pl.size.y, pl.size.z);
     const mat = new THREE.MeshStandardMaterial({
-      color: 0xfff6e8,
+      color: this.panelColor.clone(),
       emissive: new THREE.Color(this.emissiveColor),
       emissiveIntensity: this.baseEmissive,
       transparent: true,
@@ -99,7 +102,8 @@ export class PanelMeshes {
   setSelected(key) {
     for (const [k, item] of this.items) {
       const selected = k === key;
-      item.mesh.material.color.set(selected ? 0x9ec5ff : 0xfff6e8);
+      if (selected) item.mesh.material.color.set(0x9ec5ff);
+      else item.mesh.material.color.copy(this.panelColor);
     }
   }
 

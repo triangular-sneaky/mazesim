@@ -20,6 +20,7 @@ panel:
   height: 0.45     # vertical dimension (m)
   thickness: 0.012 # (m)
   opacity: 0.5     # translucent acrylic
+  color: "#fff6e8"      # diffuse tint reflecting room lights when OFF; darken to sharpen on/off contrast
   emissive: "#fff1d6"   # warm-white glow tint (only shows while blinking)
   baseEmissive: 0.0     # off panels emit no light; glow comes only from blink
 

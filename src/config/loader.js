@@ -2,6 +2,7 @@ import yaml from 'js-yaml';
 // Vite `?raw` imports: the YAML files are bundled as text and reloaded on refresh.
 import layoutText from '../../config/layout.yaml?raw';
 import demosText from '../../config/demos.yaml?raw';
+import loopsText from '../../config/loops.yaml?raw';
 
 /**
  * Parse the layout YAML into a validated config object plus an expanded panel list.
@@ -82,4 +83,69 @@ export function loadDemos() {
   }
   const demos = doc && Array.isArray(doc.demos) ? doc.demos : [];
   return demos;
+}
+
+/**
+ * Parse a BLOCK matrix — the same glyph-per-column style as parseMatrix, but each
+ * glyph is captured as a block label instead of just marking occupancy.
+ * '.' (and spaces, which are stripped) = a cell in no block.
+ * @returns {{x:number,y:number,block:string}[]}
+ */
+export function parseBlockMatrix(text) {
+  const rows = text.replace(/\r/g, '').split('\n');
+  const out = [];
+  let y = 0;
+  for (const raw of rows) {
+    const chars = raw.replace(/ /g, '');
+    if (chars.length === 0 && raw.trim() === '') continue; // skip blank lines, don't advance y
+    for (let x = 0; x < chars.length; x++) {
+      if (chars[x] !== '.') out.push({ x, y, block: chars[x] });
+    }
+    y++;
+  }
+  return out;
+}
+
+/**
+ * Load loop definitions from loops.yaml. Each entry maps cells to blocks via a
+ * `blocks` matrix; cells sharing a glyph form one block (a slab that moves in unison).
+ * Returns entries with their cells grouped per block, ready for the `loop` generator.
+ * @returns {{id:string,name:string,desc:string,groups:{block:string,cells:{x:number,y:number}[]}[],params:object}[]}
+ */
+export function loadLoops() {
+  let doc;
+  try {
+    doc = yaml.load(loopsText);
+  } catch (e) {
+    throw new Error(`loops.yaml is not valid YAML: ${e.message}`);
+  }
+  const entries = doc && Array.isArray(doc.loops) ? doc.loops : [];
+  return entries.map((e) => {
+    if (typeof e.blocks !== 'string') {
+      throw new Error(`loop "${e.id ?? '(no id)'}" must have a "blocks" matrix string`);
+    }
+    if (!e.behavior) {
+      throw new Error(`loop "${e.id ?? '(no id)'}" must have a "behavior" field`);
+    }
+    // Merge behavior defaults (top-level section named by behavior) with per-entry params.
+    const behaviorDef = (doc && typeof doc[e.behavior] === 'object') ? doc[e.behavior] : {};
+    // `generator` inside the behavior section lets a behavior reuse an existing generator
+    // with different default params — without any new code. Falls back to behavior name.
+    const generator = behaviorDef.generator ?? e.behavior;
+    const { generator: _drop, ...defaults } = behaviorDef; // strip generator key from params
+    const params = { ...defaults, ...(e.params || {}) };
+
+    // 'x'/'X' mark occupied-but-unassigned cells (like '.', they join no block).
+    const RESERVED = new Set(['x', 'X']);
+    const byBlock = new Map();
+    for (const { x, y, block } of parseBlockMatrix(e.blocks)) {
+      if (RESERVED.has(block)) continue;
+      if (!byBlock.has(block)) byBlock.set(block, []);
+      byBlock.get(block).push({ x, y });
+    }
+    const groups = [...byBlock.entries()]
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true }))
+      .map(([block, cells]) => ({ block, cells }));
+    return { id: e.id, name: e.name, desc: e.desc, behavior: e.behavior, generator, groups, params };
+  });
 }

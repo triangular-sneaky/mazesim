@@ -3,8 +3,9 @@
 # a timed action list from the live panel set, so it adapts to any layout.
 # Generators: allTo | wave | ripple | mountain | sparkle | scatter | chase
 #
-# `group` organizes movements in the UI (with search). The built-in set below is
-# the "Demos" group; add new movements with any `group:` to create more sections.
+# `group` organizes movements in the UI (with search). Groups appear in the order
+# their first movement is listed here; add new movements with any `group:` to create
+# more sections.
 # NOTE: travel speed is global (set live in the UI) — movements no longer carry a
 # per-movement velocity; timing/cascade comes from each generator's `interval`.
 #
@@ -13,6 +14,35 @@
 # controls rather than a Play button.
 
 demos:
+  - id: all-up
+    name: All up
+    desc: raise every panel to the top and turn all lights off
+    group: Transition
+    generator: allTo
+    params: { position: 255, lightsOff: true }
+
+  - id: chase-top-1
+    name: Pattern on top 1
+    desc: 10s diagonal chase into a symmetric two-height pattern spanning the top three-quarters — slow blinks while moving, then panels and lights hold static
+    group: Chase
+    generator: chase
+    # Two heights span the top 3/4 of travel: top (255) and 1/4-up-from-the-bottom (64).
+    params: { duration: 10000, topA: 255, topB: 64 }
+
+  - id: chase-top-2
+    name: Pattern on top 2
+    desc: 10s scattered chase into random heights across the top three-quarters — panels settle at varied levels (not two layers), slow blinks while moving, then panels and lights hold static
+    group: Chase
+    generator: chase
+    # Same top-3/4 band [64..255], but each panel lands at a random height within it.
+    params: { duration: 10000, topA: 255, topB: 64, random: true }
+
+  - id: prison
+    name: Prison
+    desc: click a cell — its 4 edges cage the person, dropping and pulsing; click another to move the cage
+    group: interlude
+    interactive: true
+
   - id: wave-ns
     name: Wave (N→S)
     desc: rows rise then settle, north to south
@@ -55,13 +85,6 @@ demos:
     generator: scatter
     params: { duration: 8000, moves: 60, blinks: 40, minPos: 0, maxPos: 255 }
 
-  - id: all-up
-    name: All up
-    desc: raise every panel to the top and turn all lights off
-    group: Demos
-    generator: allTo
-    params: { position: 255, lightsOff: true }
-
   - id: all-down
     name: All down
     desc: lower every panel to the floor
@@ -75,25 +98,3 @@ demos:
     group: Demos
     generator: allTo
     params: { position: 128 }
-
-  - id: chase-top-1
-    name: Pattern on top 1
-    desc: 10s diagonal chase into a symmetric two-height pattern spanning the top three-quarters — slow blinks while moving, then panels and lights hold static
-    group: Chase
-    generator: chase
-    # Two heights span the top 3/4 of travel: top (255) and 1/4-up-from-the-bottom (64).
-    params: { duration: 10000, topA: 255, topB: 64 }
-
-  - id: chase-top-2
-    name: Pattern on top 2
-    desc: 10s scattered chase into random heights across the top three-quarters — panels settle at varied levels (not two layers), slow blinks while moving, then panels and lights hold static
-    group: Chase
-    generator: chase
-    # Same top-3/4 band [64..255], but each panel lands at a random height within it.
-    params: { duration: 10000, topA: 255, topB: 64, random: true }
-
-  - id: prison
-    name: Prison
-    desc: click a cell — its 4 edges cage the person, dropping and pulsing; click another to move the cage
-    group: interlude
-    interactive: true
