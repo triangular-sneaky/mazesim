@@ -16,26 +16,61 @@
 demos:
   - id: all-up
     name: All up
-    desc: raise every panel to the top and turn all lights off
+    desc: raise every panel to a target height and turn all lights off
     group: Transition
     generator: allTo
     params: { position: 255, lightsOff: true }
+    uiParams:
+      - { key: position, label: height, min: 0, max: 255, step: 5 }
 
   - id: chase-top-1
     name: Pattern on top 1
-    desc: 10s diagonal chase into a symmetric two-height pattern spanning the top three-quarters — slow blinks while moving, then panels and lights hold static
+    desc: diagonal chase into a symmetric two-height pattern — slow blinks while moving, then panels and lights hold static; auto-retriggered every period seconds
     group: Chase
     generator: chase
-    # Two heights span the top 3/4 of travel: top (255) and 1/4-up-from-the-bottom (64).
-    params: { duration: 10000, topA: 255, topB: 64 }
+    params:
+      duration: 10000
+      topA: 255
+      topB: 64
+      period: 30
+    uiParams:
+      - { key: topA,   label: top high,  min: 64,  max: 255, step: 5 }
+      - { key: topB,   label: top low,   min: 0,   max: 200, step: 5 }
+      - { key: period, label: period (s), min: 2,  max: 120, step: 1 }
+      - { key: _panel_map, type: panelMap, label: down panels, loKey: topB, hiKey: topA }
 
   - id: chase-top-2
     name: Pattern on top 2
-    desc: 10s scattered chase into random heights across the top three-quarters — panels settle at varied levels (not two layers), slow blinks while moving, then panels and lights hold static
+    desc: scattered chase into random heights — panels settle at varied levels, slow blinks while moving, then lights hold; auto-retriggered every period seconds
     group: Chase
     generator: chase
-    # Same top-3/4 band [64..255], but each panel lands at a random height within it.
-    params: { duration: 10000, topA: 255, topB: 64, random: true }
+    params:
+      duration: 10000
+      topA: 255
+      topB: 64
+      random: true
+      period: 30
+    uiParams:
+      - { key: topA,   label: top high,  min: 64,  max: 255, step: 5 }
+      - { key: topB,   label: top low,   min: 0,   max: 200, step: 5 }
+      - { key: period, label: period (s), min: 2,  max: 120, step: 1 }
+      - { key: _panel_map, type: panelMap, label: down panels, loKey: topB, hiKey: topA }
+
+  - id: maze
+    name: Maze
+    desc: generates a navigatable maze — wall panels drop to low height (lit), passage panels rise (high, lit); new random maze each retrigger
+    group: Chase
+    generator: maze
+    params:
+      duration: 12000
+      topA: 255
+      topB: 64
+      period: 30
+    uiParams:
+      - { key: topA,   label: top high,  min: 64,  max: 255, step: 5 }
+      - { key: topB,   label: top low,   min: 0,   max: 200, step: 5 }
+      - { key: period, label: period (s), min: 2,  max: 120, step: 1 }
+      - { key: _panel_map, type: panelMap, label: walls (down), loKey: topB, hiKey: topA }
 
   - id: prison
     name: Prison
@@ -84,6 +119,23 @@ demos:
     group: Demos
     generator: scatter
     params: { duration: 8000, moves: 60, blinks: 40, minPos: 0, maxPos: 255 }
+
+  - id: lullaby-drop
+    name: Drop
+    desc: field rests on the floor; center cell bounces — lit on descent, dark on ascent — each impact ripples a lift wave outward, lighting up at the crest
+    group: Lullaby V
+    generator: lullaby-drop
+    params:
+      floorPos: 0
+      dropHeight: 200
+      cycles: 6
+      rippleInterval: 400
+      rippleHeight: 0.05
+    uiParams:
+      - { key: dropHeight,     label: drop height,   min: 50,   max: 255,  step: 5    }
+      - { key: cycles,         label: cycles,        min: 1,    max: 20,   step: 1    }
+      - { key: rippleInterval, label: ripple ms/cell, min: 50,  max: 1200, step: 25   }
+      - { key: rippleHeight,   label: wave height,   min: 0.01, max: 0.30, step: 0.01 }
 
   - id: all-down
     name: All down

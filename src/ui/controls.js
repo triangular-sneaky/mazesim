@@ -41,7 +41,7 @@ export class Controls {
       <div class="row">
         <label>target</label>
         <input type="range" id="c-target" min="0" max="255" step="1" value="${Math.round(panel?.position ?? 128)}">
-        <span class="val" id="c-target-val">${Math.round(panel?.position ?? 128)}</span>
+        <input type="number" class="val" id="c-target-val" min="0" max="255" step="1" value="${Math.round(panel?.position ?? 128)}">
       </div>
       <div class="row"><button class="primary" id="c-move">Move</button>
         <span class="hint">(slider moves live · speed set in Movements)</span></div>
@@ -66,8 +66,12 @@ export class Controls {
     const targetVal = this.body.querySelector('#c-target-val');
     const doMove = () => this.engine.movePanel(x, y, orient, Number(target.value));
     target.addEventListener('input', () => {
-      targetVal.textContent = target.value;
+      targetVal.value = target.value;
       doMove(); // live feedback
+    });
+    targetVal.addEventListener('change', () => {
+      const v = Math.max(0, Math.min(255, Math.round(Number(targetVal.value) || 0)));
+      targetVal.value = v; target.value = v; doMove();
     });
     this.body.querySelector('#c-move').addEventListener('click', doMove);
 
@@ -87,11 +91,11 @@ export class Controls {
     const panel = this.engine.get(this.sel.x, this.sel.y, this.sel.orient);
     const slider = this.body.querySelector('#c-target');
     const val = this.body.querySelector('#c-target-val');
-    // Only reflect when the user isn't dragging (slider not focused).
-    if (panel && slider && document.activeElement !== slider) {
+    // Only reflect when neither slider nor val input is focused (user isn't editing).
+    if (panel && slider && document.activeElement !== slider && document.activeElement !== val) {
       const p = Math.round(panel.position);
       slider.value = p;
-      val.textContent = p;
+      val.value = p;
     }
   }
 }

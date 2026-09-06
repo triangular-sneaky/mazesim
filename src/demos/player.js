@@ -32,6 +32,12 @@ export class DemoPlayer {
     for (const a of actions) {
       this._timers.push(setTimeout(a.run, a.t));
     }
+    // Auto-retrigger: replay after `period` seconds measured from the END of the movement.
+    const period = demo.params?.period;
+    if (period > 0) {
+      const endT = actions.length ? Math.max(...actions.map((a) => a.t)) : 0;
+      this._timers.push(setTimeout(() => this.play(demo), endT + period * 1000));
+    }
   }
 }
 
@@ -398,6 +404,249 @@ export const GENERATORS = {
       if (handoff.length) {
         actions.push({ t: deactStart(s) + stealAfter, run: sweep(handoff, downPos, litHold) });
       }
+    }
+    return actions;
+  },
+
+  /**
+   * lullaby-drop: the field rests on the floor; one cell in the center bounces like
+   * a descending block (lit on the way down, dark on the way up). Each time it
+   * hits the floor it sends a radial ripple — a 10 % lift wave — outward from the
+   * impact point. Brightness peaks at the top of each panel's lift.
+   *
+   * @param params.floorPos       resting position for the whole field (default 0)
+   * @param params.dropHeight     peak height the center cell reaches (default 200)
+   * @param params.cycles         number of bounces (default 6)
+   * @param params.rippleInterval ms delay per unit of cell-distance for the ripple wave (default 200)
+   * @param params.centerX/Y      override auto-computed center cell (optional)
+   */
+  'lullaby-drop'(engine, params) {
+    const cells = cellsOf(engine);
+    const floorPos      = params.floorPos      ?? 0;
+    const dropHeight    = params.dropHeight     ?? 200;
+    const cycles        = params.cycles         ?? 6;
+    const rippleInterval = params.rippleInterval ?? 200; // ms per cell-unit of distance
+
+    // Centroid → nearest integer cell = impact point.
+    const cx = cells.reduce((s, c) => s + c.x, 0) / cells.length;
+    const cy = cells.reduce((s, c) => s + c.y, 0) / cells.length;
+    const centerX = params.centerX ?? Math.round(cx);
+    const centerY = params.centerY ?? Math.round(cy);
+
+    const allPanels = engine.list();
+    const centerKeys = new Set([
+      `${centerX},${centerY},h`,
+      `${centerX},${centerY + 1},h`,
+      `${centerX},${centerY},v`,
+      `${centerX + 1},${centerY},v`,
+    ]);
+    const centerPanels = allPanels.filter((p) => centerKeys.has(`${p.x},${p.y},${p.orient}`));
+    const otherPanels  = allPanels.filter((p) => !centerKeys.has(`${p.x},${p.y},${p.orient}`));
+
+    const rate = engine.speed * (1 - engine.ease);
+    // Time for the farthest panel to reach the floor from its current position.
+    const settleMs    = rate > 0
+      ? (Math.max(0, ...allPanels.map((p) => Math.abs(p.position - floorPos))) / rate) * 1000
+      : 0;
+    const dropTravelMs = rate > 0 ? ((dropHeight - floorPos) / rate) * 1000 : 0;
+    const rippleLift   = Math.round((dropHeight - floorPos) * (params.rippleHeight ?? 0.05));
+    const riseMs       = rate > 0 ? (rippleLift / rate) * 1000 : 0;
+
+    const darkAll = { attack: 0, sustain: 0, decay: 0, peak: 0 };
+    const snapOff = { attack: 0, sustain: 0, decay: 0.05, peak: 1.0 };
+    const glowOn  = { attack: 0.3, sustain: 3600, decay: 0, peak: 1.0 };
+    // Ripple glow: brightness ramps up over the rise so it peaks at the top of the lift,
+    // then decays as the panel descends back to the floor.
+    const rippleGlow = {
+      attack:  riseMs / 1000,
+      sustain: 0.1,
+      decay:   riseMs / 1000 * 1.5,
+      peak:    1.0,
+    };
+
+    const actions = [];
+
+    // Phase 0 — settle everything to the floor, lights off.
+    actions.push({
+      t: 0,
+      run: () => {
+        engine.sweepAll(floorPos);
+        allPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, darkAll));
+      },
+    });
+
+    const ccx = centerX + 0.5, ccy = centerY + 0.5; // center-of-cell coords for distance
+
+    for (let i = 0; i < cycles; i++) {
+      const t0    = settleMs + i * 2 * dropTravelMs;
+      const tDrop = t0 + 2 * dropTravelMs; // moment center touches the floor
+
+      // Center rises (dark).
+      actions.push({ t: t0, run: () => {
+        engine.sweepTo(centerPanels.map((p) => ({ ...p, target: dropHeight })));
+        centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, snapOff));
+      } });
+
+      // Center descends (lit).
+      actions.push({ t: t0 + dropTravelMs, run: () => {
+        engine.sweepTo(centerPanels.map((p) => ({ ...p, target: floorPos })));
+        centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, glowOn));
+      } });
+
+      // Floor touch: center snaps off; ripple radiates outward.
+      actions.push({ t: tDrop, run: () => {
+        centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, snapOff));
+      } });
+
+      for (const p of otherPanels) {
+        // Use the geometric midpoint of the panel edge for a smooth distance field.
+        const px   = p.x + (p.orient === 'h' ? 0.5 : 0);
+        const py   = p.y + (p.orient === 'h' ? 0   : 0.5);
+        const dist = Math.hypot(px - ccx, py - ccy);
+        const wt   = tDrop + dist * rippleInterval; // wave-front arrival time
+        const rippleTop = floorPos + rippleLift;
+
+        // Lift — panel rises and lights up.
+        actions.push({ t: wt, run: () => {
+          engine.movePanel(p.x, p.y, p.orient, rippleTop);
+          engine.blinkPanel(p.x, p.y, p.orient, rippleGlow);
+        } });
+
+        // Settle — panel returns to the floor.
+        actions.push({ t: wt + riseMs, run: () => {
+          engine.movePanel(p.x, p.y, p.orient, floorPos);
+        } });
+      }
+    }
+
+    return actions;
+  },
+
+  /**
+   * Generates a random navigatable maze using a randomized DFS (recursive backtracker).
+   * Cells are discovered from the live panel set: cell (cx, cy) exists when all 4 of its
+   * edge panels exist — h(cx,cy), h(cx,cy+1), v(cx,cy), v(cx+1,cy).
+   *
+   * Wall panels → topB (low, lit).  Passage panels → topA (high, lit).
+   * The panel map shows "down" panels = the maze walls. New maze each retrigger.
+   */
+  maze(engine, params) {
+    const topA     = params.topA     ?? 255;
+    const topB     = params.topB     ?? 64;
+    const duration = params.duration ?? 12000;
+
+    const rate   = engine.speed * (1 - engine.ease);
+    const panels = engine.list();
+
+    // ---- Discover cell grid -------------------------------------------------
+    // Cell (cx, cy): north=h(cx,cy), south=h(cx,cy+1), west=v(cx,cy), east=v(cx+1,cy).
+    const allKeys = new Set(panels.map((p) => `${p.x},${p.y},${p.orient}`));
+    const has = (x, y, o) => allKeys.has(`${x},${y},${o}`);
+
+    const cells = [];
+    const cellMap = new Map();
+    for (const p of panels) {
+      if (p.orient !== 'h') continue;
+      const cx = p.x, cy = p.y;
+      if (has(cx, cy, 'h') && has(cx, cy + 1, 'h') && has(cx, cy, 'v') && has(cx + 1, cy, 'v')) {
+        const k = `${cx},${cy}`;
+        if (!cellMap.has(k)) { cells.push({ cx, cy }); cellMap.set(k, { cx, cy }); }
+      }
+    }
+    if (cells.length === 0) return [];
+
+    // ---- Randomized DFS maze ------------------------------------------------
+    // Passages stored as the panel key of the removed wall between two cells.
+    // Moving south from (cx,cy): remove h(cx, cy+1).  Moving east: remove v(cx+1, cy).
+    // Moving north from (cx,cy): remove h(cx, cy).    Moving west: remove v(cx, cy).
+    const passages = new Set();
+    const visited  = new Set();
+
+    const start = cells[Math.floor(Math.random() * cells.length)];
+    const stack = [start];
+    visited.add(`${start.cx},${start.cy}`);
+
+    const DIRS = [
+      { dx: 0, dy:  1, wall: (cx, cy) => `${cx},${cy + 1},h` },
+      { dx: 0, dy: -1, wall: (cx, cy) => `${cx},${cy},h`     },
+      { dx:  1, dy: 0, wall: (cx, cy) => `${cx + 1},${cy},v` },
+      { dx: -1, dy: 0, wall: (cx, cy) => `${cx},${cy},v`     },
+    ];
+
+    while (stack.length > 0) {
+      const { cx, cy } = stack[stack.length - 1];
+      // Shuffle directions each step for variety.
+      const shuffled = DIRS.slice().sort(() => Math.random() - 0.5);
+      let moved = false;
+      for (const { dx, dy, wall } of shuffled) {
+        const nk = `${cx + dx},${cy + dy}`;
+        if (cellMap.has(nk) && !visited.has(nk)) {
+          visited.add(nk);
+          passages.add(wall(cx, cy));
+          stack.push({ cx: cx + dx, cy: cy + dy });
+          moved = true;
+          break;
+        }
+      }
+      if (!moved) stack.pop();
+    }
+
+    // ---- Add a single exit on the left, top, or right border (not at corners) ----
+    // Collect the unique sorted cx/cy values of cells to identify the border row/column.
+    const cxVals = [...new Set(cells.map((c) => c.cx))].sort((a, b) => a - b);
+    const cyVals = [...new Set(cells.map((c) => c.cy))].sort((a, b) => a - b);
+    const minCX = cxVals[0], maxCX = cxVals[cxVals.length - 1];
+    const minCY = cyVals[0];
+
+    // Candidates: border panels that exist and whose adjacent interior cell is not a corner cell
+    // (i.e. skip the first and last entry in the border so the exit isn't flush with two walls).
+    const exits = [];
+    for (const cx of cxVals.slice(1, -1)) {  // top border — skip leftmost/rightmost columns
+      const k = `${cx},${minCY},h`;
+      if (allKeys.has(k)) exits.push(k);
+    }
+    for (const cy of cyVals.slice(1, -1)) {  // left border — skip top/bottom rows
+      const k = `${minCX},${cy},v`;
+      if (allKeys.has(k)) exits.push(k);
+    }
+    for (const cy of cyVals.slice(1, -1)) {  // right border — skip top/bottom rows
+      const k = `${maxCX + 1},${cy},v`;
+      if (allKeys.has(k)) exits.push(k);
+    }
+    if (exits.length > 0) passages.add(exits[Math.floor(Math.random() * exits.length)]);
+
+    // ---- Build timed actions (same timing model as chase) -------------------
+    const slow     = { attack: 0.8, sustain: 0.7, decay: 1.3, peak: 0.6 };
+    const litHold  = { attack: 0.6, sustain: 3600, decay: 0, peak: 0.9 };
+    const darkHold = { attack: 0.4, sustain: 3600, decay: 0, peak: 0   };
+
+    const plan = panels.map((p) => {
+      const passage = passages.has(`${p.x},${p.y},${p.orient}`);
+      const target  = passage ? topA : topB;
+      return {
+        p, target, passage,
+        rank:   Math.random(),
+        travel: rate > 0 ? (Math.abs(target - p.position) / rate) * 1000 : 0,
+      };
+    });
+
+    const maxTravel   = Math.max(0, ...plan.map((it) => it.travel));
+    const startWindow = Math.max(0, duration - maxTravel);
+
+    const actions = [];
+    for (const { p, target, passage, rank, travel } of plan) {
+      const t0     = rank * startWindow;
+      const finish = t0 + travel;
+
+      actions.push({ t: t0,     run: () => engine.movePanel(p.x, p.y, p.orient, target) });
+      actions.push({ t: t0,     run: () => engine.blinkPanel(p.x, p.y, p.orient, slow)  });
+      if (travel > 1600) {
+        actions.push({ t: t0 + travel * 0.5, run: () => engine.blinkPanel(p.x, p.y, p.orient, slow) });
+      }
+      actions.push({
+        t: finish,
+        run: () => engine.blinkPanel(p.x, p.y, p.orient, passage ? litHold : darkHold),
+      });
     }
     return actions;
   },

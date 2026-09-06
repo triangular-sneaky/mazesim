@@ -8,6 +8,10 @@
  * expands an inline collapsible controls panel (the controller's own UI) rather
  * than a Play button. A controller implements { el, setActive(on) }.
  *
+ * A movement with a `uiParams` array in its config gets a ⚙ toggle button that
+ * expands an inline parameter editor. Edited values persist for the session and
+ * are passed to the generator each time Play is pressed.
+ *
  * @param {object} [opts]
  * @param {() => void} [opts.onManual]  called when the user manually plays or stops
  *   a movement (used to cancel the auto-cycle).
@@ -26,10 +30,13 @@ export class DemoBank {
     this.onCycle = opts.onCycle;
     this.searchEl = opts.searchEl || null;
     this.controllers = opts.controllers || {};
+    this.engine = opts.engine || null;
 
     this._filter = '';
     this._collapsed = new Set(opts.collapsed || []); // group names collapsed (seeded, then toggled by the user)
     this._open = new Set();       // interactive movement ids with controls expanded
+    this._openParams = new Set(); // ids with param editor expanded
+    this._liveParams = new Map(); // id -> current param values (user-editable copy)
 
     if (this.searchEl) {
       this.searchEl.addEventListener('input', () => {
@@ -38,6 +45,14 @@ export class DemoBank {
       });
     }
     this._render();
+  }
+
+  /** Return the live (user-editable) params for a demo, initialised from its config. */
+  _getParams(demo) {
+    if (!this._liveParams.has(demo.id)) {
+      this._liveParams.set(demo.id, { ...(demo.params || {}) });
+    }
+    return this._liveParams.get(demo.id);
   }
 
   /** Group movements by their `group` field (default "Demos"), preserving order. */
@@ -66,6 +81,110 @@ export class DemoBank {
       this.player.stop();
     }
     this._render();
+  }
+
+  _toggleParams(id) {
+    if (this._openParams.has(id)) this._openParams.delete(id);
+    else this._openParams.add(id);
+    this._render();
+  }
+
+  /** Build a param editor row for one uiParam spec. Mutates the liveP object on change. */
+  _paramRow(spec, liveP) {
+    if (spec.type === 'panelMap') return this._panelMapRow(spec, liveP);
+
+    const val = liveP[spec.key] ?? spec.min;
+    const isInt = Number.isInteger(spec.step ?? 1);
+    const fmt = (v) => isInt ? String(Math.round(v)) : v.toFixed(2);
+
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const label = document.createElement('label');
+    label.textContent = spec.label;
+    row.append(label);
+
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = spec.min;
+    input.max = spec.max;
+    input.step = spec.step ?? 1;
+    input.value = val;
+    row.append(input);
+
+    const display = document.createElement('input');
+    display.type = 'number';
+    display.className = 'val';
+    display.min = spec.min; display.max = spec.max; display.step = spec.step ?? 1;
+    display.value = fmt(val);
+    row.append(display);
+
+    input.addEventListener('input', () => {
+      const num = parseFloat(input.value);
+      liveP[spec.key] = num;
+      display.value = fmt(num);
+    });
+
+    display.addEventListener('change', () => {
+      const raw = parseFloat(display.value);
+      const num = Math.max(spec.min, Math.min(spec.max, isNaN(raw) ? spec.min : raw));
+      liveP[spec.key] = num;
+      display.value = fmt(num);
+      input.value = num;
+    });
+
+    return row;
+  }
+
+  /**
+   * Live canvas showing which panels are currently in the lower half of the movement range.
+   * Threshold = (liveP[spec.hiKey] + liveP[spec.loKey]) / 2.
+   * Uses a self-terminating rAF loop: stops automatically when the canvas leaves the DOM.
+   */
+  _panelMapRow(spec, liveP) {
+    if (!this.engine) return document.createElement('div');
+
+    const COLS = 7, ROWS = 9; // v-panel grid: x=0..6, y=0..8 edge-space
+    const CS = 18;             // cell size px
+    const PAD = 2;
+    const W = COLS * CS + PAD * 2, Hc = ROWS * CS + PAD * 2;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'row';
+    const label = document.createElement('label');
+    label.textContent = spec.label;
+    wrap.append(label);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = Hc;
+    canvas.style.cssText = `width:${W}px;height:${Hc}px;background:#0d0f12;border-radius:3px;flex:none`;
+    wrap.append(canvas);
+
+    const ctx = canvas.getContext('2d');
+    const panels = this.engine.list();
+
+    const drawMap = () => {
+      if (!canvas.isConnected) return; // self-terminate when removed from DOM
+      const lo = liveP[spec.loKey] ?? 0, hi = liveP[spec.hiKey] ?? 255;
+      const threshold = (lo + hi) / 2;
+
+      ctx.fillStyle = '#0d0f12';
+      ctx.fillRect(0, 0, W, Hc);
+
+      for (const p of panels) {
+        // h(x,y) panel: draw at cell column x, row y (horizontal edge)
+        // v(x,y) panel: draw at cell column x, row y (vertical edge)
+        const cx = PAD + p.x * CS, cy = PAD + p.y * CS;
+        const down = p.position <= threshold;
+        ctx.fillStyle = down ? '#c8a060' : '#1c2030';
+        if (p.orient === 'h') ctx.fillRect(cx, cy, CS - 1, 3);
+        else ctx.fillRect(cx, cy, 3, CS - 1);
+      }
+      requestAnimationFrame(drawMap);
+    };
+    requestAnimationFrame(drawMap);
+
+    return wrap;
   }
 
   _render() {
@@ -115,11 +234,39 @@ export class DemoBank {
             this.listEl.append(box);
           }
         } else {
-          const btn = document.createElement('button');
-          btn.textContent = 'Play';
-          btn.addEventListener('click', () => { this.onManual?.(); this.player.play(demo); });
-          row.append(info, btn);
+          const hasUi = Array.isArray(demo.uiParams) && demo.uiParams.length > 0;
+          const paramsOpen = hasUi && this._openParams.has(demo.id);
+          const liveP = hasUi ? this._getParams(demo) : (demo.params || {});
+
+          const playBtn = document.createElement('button');
+          playBtn.textContent = 'Play';
+          playBtn.addEventListener('click', () => {
+            this.onManual?.();
+            this.player.play({ ...demo, params: liveP });
+          });
+
+          if (hasUi) {
+            const gearBtn = document.createElement('button');
+            gearBtn.textContent = '⚙';
+            gearBtn.title = 'Edit parameters';
+            gearBtn.style.cssText = 'padding:5px 7px;flex:none';
+            gearBtn.classList.toggle('primary', paramsOpen);
+            gearBtn.addEventListener('click', () => this._toggleParams(demo.id));
+            row.append(info, gearBtn, playBtn);
+          } else {
+            row.append(info, playBtn);
+          }
+
           this.listEl.append(row);
+
+          if (paramsOpen) {
+            const form = document.createElement('div');
+            form.className = 'demo-controls';
+            for (const spec of demo.uiParams) {
+              form.append(this._paramRow(spec, liveP));
+            }
+            this.listEl.append(form);
+          }
         }
       }
     }

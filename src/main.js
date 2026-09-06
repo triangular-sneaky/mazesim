@@ -8,6 +8,7 @@ import { Controls } from './ui/controls.js';
 import { CellBoard } from './ui/cellBoard.js';
 import { DemoBank } from './ui/demoBank.js';
 import { PrisonMode } from './ui/prisonMode.js';
+import { MidiMode } from './ui/midiMode.js';
 import { VideoMode } from './ui/videoMode.js';
 import { DemoPlayer } from './demos/player.js';
 import { setupDetach } from './ui/detach.js';
@@ -109,12 +110,17 @@ function main() {
 
   // Interactive movements (live controllers instead of timelines), keyed by movement id.
   const prison = new PrisonMode(engine, cells, config);
+  const midi = new MidiMode(engine);
+
+  // Mount MIDI as a persistent sidebar section — not a movement.
+  document.getElementById('midi-section').appendChild(midi.el);
 
   new DemoBank(document.getElementById('demo-list'), demos, player, {
     onManual: stopCycle,
     onCycle: startCycle,
     searchEl: document.getElementById('move-search'),
     controllers: { prison },
+    engine,
     collapsed: ['Demos'], // the Demos section starts collapsed
   });
   // On load, settle into the "All up" transition (panels up, lights off) rather than
@@ -126,10 +132,14 @@ function main() {
   const speed = document.getElementById('move-speed');
   const speedVal = document.getElementById('move-speed-val');
   speed.value = engine.speed;
-  speedVal.textContent = engine.speed;
+  speedVal.value = engine.speed;
   speed.addEventListener('input', () => {
     engine.setSpeed(Number(speed.value));
-    speedVal.textContent = speed.value;
+    speedVal.value = speed.value;
+  });
+  speedVal.addEventListener('change', () => {
+    const v = Math.max(20, Math.min(400, Math.round(Number(speedVal.value) || 0)));
+    speedVal.value = v; speed.value = v; engine.setSpeed(v);
   });
 
   // Camera presets
@@ -155,10 +165,14 @@ function main() {
   const fov = document.getElementById('video-fov');
   const fovVal = document.getElementById('video-fov-val');
   fov.value = view.camera.fov;
-  fovVal.textContent = view.camera.fov;
+  fovVal.value = view.camera.fov;
   fov.addEventListener('input', () => {
     view.setFov(Number(fov.value));
-    fovVal.textContent = fov.value;
+    fovVal.value = fov.value;
+  });
+  fovVal.addEventListener('change', () => {
+    const v = Math.max(20, Math.min(120, Math.round(Number(fovVal.value) || 0)));
+    fovVal.value = v; fov.value = v; view.setFov(v);
   });
 
   // Mobile controls toggle: show/hide the overlay sidebar (button is hidden on desktop).
@@ -180,6 +194,7 @@ function main() {
     last = now;
     engine.tick(dt);
     prison.tick(dt); // drives caged panels directly; no-op unless its controls are open
+    midi.tick(dt);   // re-asserts held brightness; mutes movement LEDs when mute is on
     meshes.sync();
     gridMap.draw();
     cellBoard.draw();

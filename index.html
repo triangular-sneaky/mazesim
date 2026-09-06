@@ -42,6 +42,12 @@
         border-radius: 4px; padding: 3px 5px; font: inherit; width: 72px;
       }
       .row .val { width: 40px; text-align: right; color: var(--accent); }
+      .row input.val {
+        background: none; border: none; padding: 0; font: inherit;
+        -moz-appearance: textfield;
+      }
+      .row input.val::-webkit-inner-spin-button,
+      .row input.val::-webkit-outer-spin-button { display: none; }
       button {
         background: #22252b; color: var(--text); border: 1px solid var(--border);
         border-radius: 4px; padding: 5px 9px; font: inherit; cursor: pointer;
@@ -109,10 +115,15 @@
       .seg button:first-child { border-radius: 4px 0 0 4px; }
       .seg button:last-child { border-radius: 0 4px 4px 0; border-right: 1px solid var(--border); }
       #cellboard-wrap canvas { width: 100%; background: #0d0f12; border-radius: 4px; cursor: crosshair; touch-action: none; }
-      /* When the sidebar is detached into its own window it fills that window. */
+      /* When the sidebar is detached into its own window: full-width, scrollable. */
       body.detached-window #sidebar {
         width: 100%; height: 100%; border-left: none;
+        overflow-y: auto; overflow-x: hidden;
+        /* Reset mobile overrides (popup is narrow, so the 768px breakpoint fires) */
+        position: static; transform: none; transition: none; max-width: 100%;
       }
+      body.detached-window #grid-map { width: auto; }
+      body.detached-window .row label { width: 96px; }
       /* Floating toggle to show/hide the sidebar — mobile only (hidden on desktop). */
       #sidebar-toggle {
         display: none; position: fixed; top: 10px; right: 10px; z-index: 20;
@@ -170,11 +181,15 @@
           <div class="row">
             <label>speed</label>
             <input type="range" id="move-speed" min="20" max="400" step="1">
-            <span class="val" id="move-speed-val">—</span>
+            <input type="number" class="val" id="move-speed-val" min="20" max="400" step="1">
           </div>
           <div class="hint">Cruise speed for all movement (constant, with slight ease in/out).</div>
           <input type="search" id="move-search" class="search" placeholder="Search movements…">
           <div id="demo-list"></div>
+        </div>
+        <div class="section" id="midi-section">
+          <h2>MIDI</h2>
+          <!-- midi.el injected here by main.js -->
         </div>
         <div class="section" id="video-section">
           <h2>Video overlay</h2>
@@ -192,7 +207,7 @@
           <div class="row">
             <label>fov</label>
             <input type="range" id="video-fov" min="20" max="120" step="1">
-            <span class="val" id="video-fov-val">—</span>
+            <input type="number" class="val" id="video-fov-val" min="20" max="120" step="1">
           </div>
           <div class="row">
             <label>adjust</label>
