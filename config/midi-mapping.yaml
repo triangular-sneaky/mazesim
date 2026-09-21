@@ -6,40 +6,39 @@
 #   h: [ ... ]  horizontal wall panels (notes on the horizontal grid lines)
 # Lists run West → East. Row 0 is the North edge.
 #
-# Notation:
-#   ??            panel exists but the note is unreadable in the photo
-#   -             no panel here (outside the L-shaped boundary)
-#   X(Y?)         read as X, but might be Y
-#   $             single illegible character in an otherwise-readable note
+# Entries are `Note=Number`, where Number is the decimal MIDI note-on value the
+# panel responds to. Convention: D4 = 74  (so C4 = 72; MIDI = (octave+2)*12 + pc).
+#   -   no panel here (outside the L-shaped boundary)
 #
-# Note numbers are NOT encoded yet — names only. Convention when we do: D4 = 74.
+# All notes verified against hardware by firing note-on and watching the panel.
+# The set is a contiguous run B-1 (23) → D7 (110) with exactly two gaps —
+# no panel exists for B4=83 or C7=108. Do not "fill" those; they are absent.
 
 grid:
   - y: 0
-    v: [D5 110 G4 D#5(B#5?) - -]
-    h: [A#3 109 C#5 B2 E5 B6]
+    v: [D5=86 D7=110 G4=79 D#5=87 - -]
+    h: [A#3=70 C#7=109 C#5=85 B2=59 E5=88 B6=107]
   - y: 1
-    v: [A#2 C5 F5 C3(A-1) A#6 A#4]
-    h: [A2 D#1 C#3 F#5 A6 A4]
+    v: [A#2=58 C5=84 F5=89 C3=60 A#6=106 A#4=82]
+    h: [A2=57 D#1=39 C#3=61 F#5=90 A6=105 A4=81]
   - y: 2
-    v: [D1 G#2 D3 E1 G#4 G5]
-    h: [C#6 G2 C#1 D#0 F1(F7?) D#3(B#3?)]
+    v: [D1=38 G#2=56 D3=62 E1=40 G#4=80 G5=91]
+    h: [C#6=97 G2=55 C#1=37 D#0=27 F1=41 D#3=63]
   - y: 3
-    v: [F#2 C1 D0 E0 F#1 E3]
-    h: [F2 B0 C#0 B-1 F0 G1]
+    v: [F#2=54 C1=36 D0=26 E0=28 F#1=42 E3=64]
+    h: [F2=53 B0=35 C#0=25 B-1=23 F0=29 G1=43]
   - y: 4
-    v: [E2 F#4 C-0 A#0 G#1 G#5]
-    h: [D6 G#6 F4 D#2 A0 B5]
+    v: [E2=52 F#4=78 C0=24 A#0=34 G#1=44 G#5=92]
+    h: [D6=98 G#6=104 F4=77 D#2=51 A0=33 B5=95]
   - y: 5
-    v: [F#0 G6 F#3 D2 F3]
-    h: [G0 A1 G3 A5 G#3]
+    v: [F#0=30 G6=103 F#3=66 D2=50 F3=65]
+    h: [G0=31 A1=45 G3=67 A5=93 G#3=68]
   - y: 6
-    v: [A#1 E4 A#5 C6?]
-    h: [B3 F#6 D#4 E6]
+    v: [A#1=46 E4=76 A#5=94 C6=96]
+    h: [B3=71 F#6=102 D#4=75 E6=100]
   - y: 7
-    v: [G#0 F6 A3]
-    h: [C#2 B1 D#6(B#6?)]
+    v: [G#0=32 F6=101 A3=69]
+    h: [C#2=49 B1=47 D#6=99]
   - y: 8
-    v: [C2 C#4]
-    h: [C4 D4]
-
+    v: [C2=48 C#4=73]
+    h: [C4=72 D4=74]
