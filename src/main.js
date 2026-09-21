@@ -10,6 +10,7 @@ import { DemoBank } from './ui/demoBank.js';
 import { PrisonMode } from './ui/prisonMode.js';
 import { LullabyFloat } from './ui/lullabyFloat.js';
 import { MidiMode } from './ui/midiMode.js';
+import { MazeMidiController } from './ui/mazeMidiController.js';
 import { VideoMode } from './ui/videoMode.js';
 import { DemoPlayer } from './demos/player.js';
 import { setupDetach } from './ui/detach.js';
@@ -116,6 +117,10 @@ function main() {
 
   // Mount MIDI as a persistent sidebar section — not a movement.
   document.getElementById('midi-section').appendChild(midi.el);
+
+  // MIDI investigation: sends note messages OUT to the physical maze.
+  const mazeMidi = new MazeMidiController();
+  document.getElementById('midi-investigation-section').appendChild(mazeMidi.el);
 
   new DemoBank(document.getElementById('demo-list'), demos, player, {
     onManual: stopCycle,
