@@ -8,6 +8,7 @@ import { Controls } from './ui/controls.js';
 import { CellBoard } from './ui/cellBoard.js';
 import { DemoBank } from './ui/demoBank.js';
 import { PrisonMode } from './ui/prisonMode.js';
+import { LullabyFloat } from './ui/lullabyFloat.js';
 import { MidiMode } from './ui/midiMode.js';
 import { VideoMode } from './ui/videoMode.js';
 import { DemoPlayer } from './demos/player.js';
@@ -36,15 +37,15 @@ function main() {
     return;
   }
 
-  // Each loops.yaml entry becomes a movement (generator `loop`) under a "Loops" group,
-  // placed right after the Transition group.
+  // Each loops.yaml entry becomes a movement under a "Loops" group, inserted after Chase.
   const loopDemos = loops.map((lp) => ({
     id: lp.id, name: lp.name, desc: lp.desc, group: 'Loops',
     generator: lp.generator, params: { groups: lp.groups, ...lp.params },
   }));
   if (loopDemos.length) {
-    const after = demos.findIndex((d) => (d.group || 'Demos') !== 'Transition');
-    demos.splice(after < 0 ? demos.length : after, 0, ...loopDemos);
+    const lastChase = [...demos].map((d, i) => d.group === 'Chase' ? i : -1).filter((i) => i >= 0).pop();
+    const after = lastChase != null ? lastChase + 1 : demos.length;
+    demos.splice(after, 0, ...loopDemos);
   }
 
   try {
@@ -110,7 +111,8 @@ function main() {
 
   // Interactive movements (live controllers instead of timelines), keyed by movement id.
   const prison = new PrisonMode(engine, cells, config);
-  const midi = new MidiMode(engine);
+  const lullabyFloat = new LullabyFloat(engine);
+  const midi = new MidiMode(engine, { player });
 
   // Mount MIDI as a persistent sidebar section — not a movement.
   document.getElementById('midi-section').appendChild(midi.el);
@@ -119,9 +121,9 @@ function main() {
     onManual: stopCycle,
     onCycle: startCycle,
     searchEl: document.getElementById('move-search'),
-    controllers: { prison },
+    controllers: { prison, 'lullaby-float': lullabyFloat },
     engine,
-    collapsed: ['Demos'], // the Demos section starts collapsed
+    collapseAll: true, // all groups start collapsed; user expands as needed
   });
   // On load, settle into the "All up" transition (panels up, lights off) rather than
   // auto-cycling demos. The cycle is still available via the "Cycle demos" button.
@@ -193,8 +195,9 @@ function main() {
     const dt = Math.min((now - last) / 1000, 0.1); // clamp big gaps
     last = now;
     engine.tick(dt);
-    prison.tick(dt); // drives caged panels directly; no-op unless its controls are open
-    midi.tick(dt);   // re-asserts held brightness; mutes movement LEDs when mute is on
+    prison.tick(dt);       // drives caged panels directly; no-op unless its controls are open
+    lullabyFloat.tick(dt); // brightness only — reads actual panel positions; no-op when inactive
+    midi.tick(dt);         // re-asserts held brightness; mutes movement LEDs when mute is on
     meshes.sync();
     gridMap.draw();
     cellBoard.draw();

@@ -1,24 +1,24 @@
 /**
- * MIDI overlay — drives panel LEDs from a MIDI controller on top of whatever movement
- * is currently playing. Panels still move normally; only brightness is affected here.
+ * MIDI overlay — drives panel LEDs (and optionally movement triggers) from a MIDI
+ * controller on top of whatever movement is currently playing.
  *
- * When enabled, note-on lights the corresponding panel (seeded from velocity), aftertouch
- * sets brightness live, and note-off turns it off. Runs continuously; no movement lifecycle.
- *
- * Mute mode: when `this.muted` is true, every non-held panel's brightness is forced to 0
- * every frame. The movement still moves panels — only its LED effects are suppressed.
- *
- * Brightness mechanism: `panel.brightness` is a plain field that `panel.tick()` only
- * overwrites while a blink envelope is running. We re-assert held brightness each frame
- * in `tick()`, so MIDI always wins after any envelope pass. Mute works the same way.
+ * Effects:
+ *   'lights'  — note-on lights the panel (seeded from velocity), aftertouch sets
+ *               brightness live, note-off turns it off. The classic overlay.
+ *   'trigger' — any note-on fires one particle burst on the currently-playing
+ *               triggerable movement (Particles). Note-off/aftertouch ignored.
+ *               The movement's auto-loop is suppressed while this is armed.
  */
 export class MidiMode {
   constructor(engine, opts = {}) {
     this.engine   = engine;
+    this.player   = opts.player ?? null;
     this.baseNote = opts.baseNote ?? 36;   // C1
 
     this.enabled  = false;
-    this.muted    = false;                 // suppress movement lights when true
+    this.muted    = false;
+    this.effect   = 'lights';              // 'lights' | 'trigger'
+    this.channel  = 'all';                // 'all' or 0-15 (MIDI channel index)
 
     this._requested = false;
     this.access     = null;
@@ -28,13 +28,13 @@ export class MidiMode {
     this.panels      = engine.list();
     this.noteToPanel = new Map();
     this.held        = new Map();   // note -> brightness
-    this.heldPanels  = new Set();   // Panel -> fast membership check for mute
+    this.heldPanels  = new Set();
 
     this._buildMap();
     this._buildUI();
   }
 
-  // ---- Note map -------------------------------------------------------------
+  // ---- Note map ---------------------------------------------------------------
 
   _buildMap() {
     this.noteToPanel.clear();
@@ -56,6 +56,11 @@ export class MidiMode {
 
   _buildUI() {
     const el = document.createElement('div');
+    const sel = (css = '') =>
+      Object.assign(document.createElement('select'), { style: {
+        cssText: `flex:1;width:auto;background:#0d0f12;color:var(--text);` +
+                 `border:1px solid var(--border);border-radius:4px;padding:3px 5px;font:inherit;${css}`,
+      }});
 
     // Enable toggle
     const enableRow = document.createElement('div');
@@ -66,24 +71,44 @@ export class MidiMode {
     this._enableBtn.addEventListener('click', () => this.enable(!this.enabled));
     enableRow.append(this._enableBtn);
 
+    // Effect
+    const effectRow = document.createElement('div');
+    effectRow.className = 'row';
+    effectRow.innerHTML = '<label>effect</label>';
+    this._effectSel = sel();
+    this._effectSel.innerHTML =
+      '<option value="lights">Horizontal lights</option>' +
+      '<option value="trigger">Trigger</option>';
+    this._effectSel.value = this.effect;
+    this._effectSel.addEventListener('change', () => this._setEffect(this._effectSel.value));
+    effectRow.append(this._effectSel);
+
+    // Channel filter
+    const chanRow = document.createElement('div');
+    chanRow.className = 'row';
+    chanRow.innerHTML = '<label>channel</label>';
+    this._channelSel = sel();
+    this._channelSel.innerHTML =
+      '<option value="all">All channels</option>' +
+      Array.from({ length: 16 }, (_, i) => `<option value="${i}">Ch ${i + 1}</option>`).join('');
+    this._channelSel.value = this.channel;
+    this._channelSel.addEventListener('change', () => {
+      const v = this._channelSel.value;
+      this.channel = v === 'all' ? 'all' : parseInt(v, 10);
+    });
+    chanRow.append(this._channelSel);
+
     // Mute movement lights
     const muteRow = document.createElement('div');
     muteRow.className = 'row';
     muteRow.innerHTML = '<label>mute movement lights</label>';
     this._muteCheck = document.createElement('input');
     this._muteCheck.type = 'checkbox';
-    this._muteCheck.addEventListener('change', () => {
-      this.muted = this._muteCheck.checked;
-      if (!this.muted) {
-        // Un-muting: let the movement repaint naturally — we just stop zeroing.
-        // Nothing to do; next engine.tick() will restore envelope-driven brightness.
-      }
-    });
-    muteRow.append(this._muteCheck);
+    this._muteCheck.addEventListener('change', () => { this.muted = this._muteCheck.checked; });
     const muteHint = document.createElement('span');
     muteHint.style.cssText = 'flex:1;color:var(--text-dim);font-size:11px;margin-left:4px';
     muteHint.textContent = 'movement still moves; only its LEDs suppressed';
-    muteRow.append(muteHint);
+    muteRow.append(this._muteCheck, muteHint);
 
     // Status
     const statusRow = document.createElement('div');
@@ -98,10 +123,7 @@ export class MidiMode {
     const deviceRow = document.createElement('div');
     deviceRow.className = 'row';
     deviceRow.innerHTML = '<label>input</label>';
-    this._deviceSel = document.createElement('select');
-    this._deviceSel.style.cssText =
-      'flex:1;width:auto;background:#0d0f12;color:var(--text);' +
-      'border:1px solid var(--border);border-radius:4px;padding:3px 5px;font:inherit';
+    this._deviceSel = sel();
     this._deviceSel.innerHTML = '<option value="all">All inputs</option>';
     this._deviceSel.addEventListener('change', () => {
       this.selectedInputId = this._deviceSel.value;
@@ -146,11 +168,10 @@ export class MidiMode {
     const hint = document.createElement('div');
     hint.className = 'hint';
     hint.textContent =
-      'Overlays on top of any active movement. ' +
-      'Aftertouch sets brightness live; note-off turns the panel off. ' +
-      'Notes assigned sequentially from base note in panel order.';
+      'Lights: notes light panels from base note; aftertouch sets brightness; note-off turns off. ' +
+      'Trigger: each note fires a particle burst on the active Particles movement (loop suppressed).';
 
-    el.append(enableRow, muteRow, statusRow, deviceRow, baseRow, mapRow, actRow, hint);
+    el.append(enableRow, effectRow, chanRow, muteRow, statusRow, deviceRow, baseRow, mapRow, actRow, hint);
     this.el = el;
     this._buildMap();
   }
@@ -174,6 +195,19 @@ export class MidiMode {
     this.selectedInputId = this._deviceSel.value;
     const n = this.access.inputs.size;
     this._setStatus(n ? `ready — ${n} input${n > 1 ? 's' : ''}` : 'no inputs found', n > 0);
+  }
+
+  // ---- Effect / arm wiring ---------------------------------------------------
+
+  _setEffect(name) {
+    if (this.effect === name) return;
+    if (this.effect === 'lights') this._allOff();
+    this.effect = name;
+    this._updateArm();
+  }
+
+  _updateArm() {
+    this.player?.armTrigger(this.enabled && this.effect === 'trigger');
   }
 
   // ---- Web MIDI lifecycle ---------------------------------------------------
@@ -210,12 +244,29 @@ export class MidiMode {
   _onMessage(ev) {
     if (!this.enabled) return;
     if (this.selectedInputId !== 'all' && ev.target?.id !== this.selectedInputId) return;
+
     const [status, d1, d2] = ev.data;
-    switch (status & 0xf0) {
-      case 0x90: (d2 > 0) ? this._noteOn(d1, d2) : this._noteOff(d1); break;
-      case 0x80: this._noteOff(d1); break;
-      case 0xa0: this._polyAt(d1, d2);  break;
-      case 0xd0: this._channelAt(d1);   break;
+
+    // Channel filter: MIDI channel is the low nibble of the status byte (0-indexed).
+    const chan = status & 0x0f;
+    if (this.channel !== 'all' && chan !== this.channel) return;
+
+    if (this.effect === 'lights') {
+      switch (status & 0xf0) {
+        case 0x90: (d2 > 0) ? this._noteOn(d1, d2) : this._noteOff(d1); break;
+        case 0x80: this._noteOff(d1); break;
+        case 0xa0: this._polyAt(d1, d2);  break;
+        case 0xd0: this._channelAt(d1);   break;
+      }
+    } else if (this.effect === 'trigger') {
+      if ((status & 0xf0) === 0x90 && d2 > 0) {
+        const ok = this.player?.fireTrigger();
+        if (ok === false) {
+          this._setStatus('no triggerable movement playing');
+        } else if (ok) {
+          if (this._activityEl) this._activityEl.textContent = `trigger  note ${d1}`;
+        }
+      }
     }
   }
 
@@ -276,9 +327,9 @@ export class MidiMode {
       this._ensureMidi();
     } else {
       this._allOff();
-      // Leave movement lights alone — let envelopes resume naturally.
       this._setStatus('disabled', false);
     }
+    this._updateArm();
   }
 
   // ---- Frame tick -----------------------------------------------------------
@@ -286,16 +337,16 @@ export class MidiMode {
   tick(_dt) {
     if (!this.enabled) return;
 
-    // Re-assert held brightness after engine.tick() may have overwritten via envelope.
-    for (const [note, b] of this.held) {
-      const p = this.noteToPanel.get(note);
-      if (p) p.brightness = b;
-    }
-
-    // Mute: force all non-MIDI-held panels dark.
-    if (this.muted) {
-      for (const p of this.panels) {
-        if (!this.heldPanels.has(p)) p.brightness = 0;
+    // Lights effect: re-assert held brightness after engine.tick() envelope pass.
+    if (this.effect === 'lights') {
+      for (const [note, b] of this.held) {
+        const p = this.noteToPanel.get(note);
+        if (p) p.brightness = b;
+      }
+      if (this.muted) {
+        for (const p of this.panels) {
+          if (!this.heldPanels.has(p)) p.brightness = 0;
+        }
       }
     }
   }

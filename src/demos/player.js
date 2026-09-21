@@ -7,18 +7,54 @@
  */
 export class DemoPlayer {
   constructor(engine) {
-    this.engine = engine;
-    this._timers = [];
-    this._running = null;
+    this.engine         = engine;
+    this._timers        = [];
+    this._triggerTimers = [];
+    this._running       = null;
+    this._demo          = null;
+    this._triggerArmed  = false;
   }
 
   stop() {
-    for (const id of this._timers) clearTimeout(id);
-    this._timers = [];
-    this._running = null;
+    for (const id of this._timers)        clearTimeout(id);
+    for (const id of this._triggerTimers) clearTimeout(id);
+    this._timers        = [];
+    this._triggerTimers = [];
+    this._running       = null;
+    this._demo          = null;
   }
 
   isRunning() { return this._running; }
+
+  /**
+   * Arm or disarm MIDI trigger mode for the loaded movement.
+   * Armed: play() suppresses auto-loop and only settles the structure.
+   * Disarmed: re-plays the current demo normally so its loop resumes.
+   */
+  armTrigger(on) {
+    if (this._triggerArmed === on) return;
+    this._triggerArmed = on;
+    if (this._demo) this.play(this._demo);
+  }
+
+  /** True when the current movement supports external triggering. */
+  isCurrentTriggerable() {
+    return !!(this._demo && TRIGGERABLE[this._demo.generator]);
+  }
+
+  /**
+   * Fire one burst for the current triggerable movement.
+   * In-flight bursts are NOT cancelled — concurrent sweeps overlap by design.
+   * Returns true on success, false if no triggerable movement is loaded.
+   */
+  fireTrigger() {
+    if (!this._triggerArmed || !this.isCurrentTriggerable()) return false;
+    const burst = TRIGGERABLE[this._demo.generator](this.engine, this._demo.params || {});
+    for (const a of burst) {
+      this._triggerTimers.push(setTimeout(a.run, a.t));
+    }
+    return true;
+  }
 
   play(demo) {
     this.stop();
@@ -27,16 +63,29 @@ export class DemoPlayer {
       console.warn(`Unknown demo generator: ${demo.generator}`);
       return;
     }
-    const actions = gen(this.engine, demo.params || {});
     this._running = demo.id;
+    this._demo    = demo;
+    const params  = demo.params || {};
+
+    // Trigger-armed mode: only settle the structure, suppress auto-loop.
+    if (this._triggerArmed && TRIGGERABLE[demo.generator]) {
+      const actions = gen(this.engine, { ...params, staticOnly: true });
+      for (const a of actions) this._timers.push(setTimeout(a.run, a.t));
+      return;
+    }
+
+    const actions = gen(this.engine, params);
     for (const a of actions) {
       this._timers.push(setTimeout(a.run, a.t));
     }
-    // Auto-retrigger: replay after `period` seconds measured from the END of the movement.
-    const period = demo.params?.period;
-    if (period > 0) {
-      const endT = actions.length ? Math.max(...actions.map((a) => a.t)) : 0;
-      this._timers.push(setTimeout(() => this.play(demo), endT + period * 1000));
+    // Auto-retrigger: `period > 0` waits N seconds after the movement ends then replays;
+    // `loop: true` replays immediately when the last action fires (continuous loop).
+    const period = params.period;
+    const loop   = params.loop;
+    if (period > 0 || loop) {
+      const endT  = actions.length ? Math.max(...actions.map((a) => a.t)) : 0;
+      const delay = period > 0 ? endT + period * 1000 : endT;
+      this._timers.push(setTimeout(() => this.play(demo), delay));
     }
   }
 }
@@ -58,6 +107,136 @@ const cellsOf = (engine) => {
  * interval/duration, the whole movement compresses coherently.
  */
 const timeScale = (engine) => engine.baseSpeed / engine.speed;
+
+/**
+ * particlesPlan — shared setup for the particles generator and external trigger bursts.
+ * Returns { settleAction, settleMs, buildBurst(tBase) }.
+ *   settleAction  — action that moves all panels to their catenary structure positions.
+ *   settleMs      — estimated ms for panels to reach those positions from their current state.
+ *   buildBurst(t) — builds a one-cycle particle sweep with all times offset by t ms.
+ *                   Re-reads engine.speed at call time so live speed slider applies.
+ */
+function particlesPlan(engine, params) {
+  const n               = Math.max(1, Math.round(params.n               ?? 2));
+  const spiralIn        = (params.spiralIn  ?? 0) > 0;
+  const numTurns        = params.numTurns   ?? 2;
+  const structureHeight = params.structureHeight ?? 128;
+  const elasticity      = params.elasticity ?? 0.9;
+  const topPos          = params.topPos     ?? 255;
+  const speed           = params.speed      ?? 300;
+  const rippleSize      = params.rippleSize ?? 0.08;
+  const rippleFadeout   = params.rippleFadeout ?? 0.8;
+  const oppose          = (params.oppose  ?? 0) > 0;
+  const fadeIn          = (params.fadeIn  ?? 0) > 0;
+
+  const panels = engine.list();
+  const cells  = cellsOf(engine);
+  const cx     = cells.reduce((s, c) => s + c.x, 0) / cells.length;
+  const cy     = cells.reduce((s, c) => s + c.y, 0) / cells.length;
+  const ccx    = cx + 0.5, ccy = cy + 0.5;
+
+  const maxDist = Math.max(1, ...panels.map((p) => {
+    const px = p.x + (p.orient === 'h' ? 0.5 : 0);
+    const py = p.y + (p.orient === 'h' ? 0   : 0.5);
+    return Math.hypot(px - ccx, py - ccy);
+  }));
+
+  const structData = panels.map((p) => {
+    const px      = p.x + (p.orient === 'h' ? 0.5 : 0);
+    const py      = p.y + (p.orient === 'h' ? 0   : 0.5);
+    const dist    = Math.hypot(px - ccx, py - ccy);
+    const falloff = Math.max(0, 1 - dist / maxDist);
+    const pos     = Math.round(topPos + (structureHeight - topPos) * falloff * elasticity);
+    return { p, pos };
+  });
+  const posOf = new Map(structData.map(({ p, pos }) => [`${p.x},${p.y},${p.orient}`, pos]));
+
+  // Archimedean spiral trajectory (nearest-panel mapping).
+  const numSamples  = Math.max(panels.length * 4, 400);
+  const spiralOrder = [];
+  const visited     = new Set();
+  for (let i = 0; i < numSamples; i++) {
+    const t     = spiralIn ? 1 - i / numSamples : i / numSamples;
+    const theta = t * 2 * Math.PI * numTurns;
+    const r     = t * maxDist;
+    const sx    = ccx + r * Math.cos(theta);
+    const sy    = ccy + r * Math.sin(theta);
+    let nearest = null, nd = Infinity;
+    for (const p of panels) {
+      const px = p.x + (p.orient === 'h' ? 0.5 : 0);
+      const py = p.y + (p.orient === 'h' ? 0   : 0.5);
+      const d  = Math.hypot(px - sx, py - sy);
+      if (d < nd) { nd = d; nearest = p; }
+    }
+    if (nearest) {
+      const key = `${nearest.x},${nearest.y},${nearest.orient}`;
+      if (!visited.has(key)) { spiralOrder.push(nearest); visited.add(key); }
+    }
+  }
+  for (const p of panels) {
+    const key = `${p.x},${p.y},${p.orient}`;
+    if (!visited.has(key)) spiralOrder.push(p);
+  }
+
+  const dark         = { attack: 0, sustain: 0, decay: 0, peak: 0 };
+  const settleAction = { t: 0, run: () => {
+    for (const { p, pos } of structData) {
+      engine.movePanel(p.x, p.y, p.orient, pos);
+      engine.blinkPanel(p.x, p.y, p.orient, dark);
+    }
+  }};
+
+  const rate    = engine.speed * (1 - engine.ease);
+  const settleMs = rate > 0
+    ? (Math.max(0, ...structData.map(({ p, pos }) => Math.abs(p.position - pos))) / rate) * 1000
+    : 500;
+
+  const totalSteps    = spiralOrder.length;
+  const cycleDuration = totalSteps * speed;
+  const groupSize     = oppose ? Math.max(1, Math.ceil(n / 2)) : n;
+
+  const buildBurst = (tBase) => {
+    const burstRate = engine.speed * (1 - engine.ease);
+    const burst = [];
+    for (let i = 0; i < totalSteps; i++) {
+      for (let pn = 0; pn < n; pn++) {
+        const isOpposed = oppose && (pn % 2 === 1);
+        const spiralIdx = isOpposed ? (totalSteps - 1 - i) : i;
+        const p         = spiralOrder[spiralIdx];
+        const sPos      = posOf.get(`${p.x},${p.y},${p.orient}`) ?? topPos;
+        const lift      = Math.round(Math.max(1, (topPos - sPos) * rippleSize));
+        const rMs       = burstRate > 0 ? (lift / burstRate) * 1000 : 80;
+
+        const pairGroup = oppose ? Math.floor(pn / 2) : pn;
+        const stagger   = (pairGroup / groupSize) * cycleDuration;
+        const t0        = tBase + stagger + i * speed;
+
+        const fadeMult = fadeIn ? Math.min(1, (stagger + i * speed) / Math.max(1, cycleDuration - speed)) : 1;
+        const glow = { attack: rMs / 1000, sustain: 0.05, decay: rippleFadeout, peak: fadeMult };
+
+        burst.push({ t: t0, run: () => {
+          engine.movePanel(p.x, p.y, p.orient, sPos + lift);
+          engine.blinkPanel(p.x, p.y, p.orient, glow);
+        }});
+        burst.push({ t: t0 + rMs, run: () => {
+          engine.movePanel(p.x, p.y, p.orient, sPos);
+        }});
+      }
+    }
+    return burst;
+  };
+
+  return { settleAction, settleMs, buildBurst };
+}
+
+/**
+ * TRIGGERABLE — movements that support external (e.g. MIDI) one-shot triggering.
+ * Each entry: (engine, params) => action[] for one burst starting at t=0.
+ * To add a new movement: implement a <gen>Plan helper and add one line here.
+ */
+const TRIGGERABLE = {
+  particles: (engine, params) => particlesPlan(engine, params).buildBurst(0),
+};
 
 export const GENERATORS = {
   /**
@@ -422,10 +601,10 @@ export const GENERATORS = {
    */
   'lullaby-drop'(engine, params) {
     const cells = cellsOf(engine);
-    const floorPos      = params.floorPos      ?? 0;
-    const dropHeight    = params.dropHeight     ?? 200;
-    const cycles        = params.cycles         ?? 6;
-    const rippleInterval = params.rippleInterval ?? 200; // ms per cell-unit of distance
+    const floorPos       = params.floorPos       ?? 0;
+    const dropLo         = params.dropLo         ?? 0;    // center's impact height (bottom of bounce)
+    const dropHeight     = params.dropHeight      ?? 200;  // center's peak height (top of bounce)
+    const rippleInterval = params.rippleInterval  ?? 200; // ms per cell-unit of distance
 
     // Centroid → nearest integer cell = impact point.
     const cx = cells.reduce((s, c) => s + c.x, 0) / cells.length;
@@ -445,22 +624,24 @@ export const GENERATORS = {
 
     const rate = engine.speed * (1 - engine.ease);
     // Time for the farthest panel to reach the floor from its current position.
-    const settleMs    = rate > 0
+    const settleMs     = rate > 0
       ? (Math.max(0, ...allPanels.map((p) => Math.abs(p.position - floorPos))) / rate) * 1000
       : 0;
-    const dropTravelMs = rate > 0 ? ((dropHeight - floorPos) / rate) * 1000 : 0;
-    const rippleLift   = Math.round((dropHeight - floorPos) * (params.rippleHeight ?? 0.05));
+    // Center travels floor→peak (risingMs) then peak→dropLo (fallingMs).
+    const risingMs  = rate > 0 ? ((dropHeight - floorPos) / rate) * 1000 : 0;
+    const fallingMs = rate > 0 ? ((dropHeight - dropLo)   / rate) * 1000 : 0;
+    const rippleLift = Math.round((dropHeight - dropLo) * (params.rippleHeight ?? 0.05));
     const riseMs       = rate > 0 ? (rippleLift / rate) * 1000 : 0;
+    // Fadeout: how long the ripple glow decays after peaking; defaults to formula, user-tunable.
+    const rippleFadeout = params.rippleFadeout ?? riseMs / 1000 * 1.5;
 
     const darkAll = { attack: 0, sustain: 0, decay: 0, peak: 0 };
     const snapOff = { attack: 0, sustain: 0, decay: 0.05, peak: 1.0 };
     const glowOn  = { attack: 0.3, sustain: 3600, decay: 0, peak: 1.0 };
-    // Ripple glow: brightness ramps up over the rise so it peaks at the top of the lift,
-    // then decays as the panel descends back to the floor.
     const rippleGlow = {
       attack:  riseMs / 1000,
       sustain: 0.1,
-      decay:   riseMs / 1000 * 1.5,
+      decay:   rippleFadeout,
       peak:    1.0,
     };
 
@@ -475,50 +656,219 @@ export const GENERATORS = {
       },
     });
 
-    const ccx = centerX + 0.5, ccy = centerY + 0.5; // center-of-cell coords for distance
+    // One bounce + ripple per play (loop: true in params drives continuous repeat).
+    const t0    = settleMs;
+    const tDrop = t0 + risingMs + fallingMs; // moment center hits dropLo
+    const ccx = centerX + 0.5, ccy = centerY + 0.5;
 
-    for (let i = 0; i < cycles; i++) {
-      const t0    = settleMs + i * 2 * dropTravelMs;
-      const tDrop = t0 + 2 * dropTravelMs; // moment center touches the floor
+    // Center rises (dark).
+    actions.push({ t: t0, run: () => {
+      engine.sweepTo(centerPanels.map((p) => ({ ...p, target: dropHeight })));
+      centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, snapOff));
+    } });
 
-      // Center rises (dark).
-      actions.push({ t: t0, run: () => {
-        engine.sweepTo(centerPanels.map((p) => ({ ...p, target: dropHeight })));
-        centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, snapOff));
+    // Center descends (lit).
+    actions.push({ t: t0 + risingMs, run: () => {
+      engine.sweepTo(centerPanels.map((p) => ({ ...p, target: dropLo })));
+      centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, glowOn));
+    } });
+
+    // Floor touch: center snaps off; ripple radiates outward.
+    actions.push({ t: tDrop, run: () => {
+      centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, snapOff));
+    } });
+
+    // Ripple-start cap: the first ring must fire within rippleStartCap ms of the drop.
+    // Compute the closest panel distance, then shift all times so that first ring ≤ cap.
+    const rippleStartCap = params.rippleStartCap ?? 300;
+    const rippleDistances = otherPanels.map((p) => {
+      const px = p.x + (p.orient === 'h' ? 0.5 : 0);
+      const py = p.y + (p.orient === 'h' ? 0   : 0.5);
+      return Math.hypot(px - ccx, py - ccy);
+    });
+    const firstDist = rippleDistances.length > 0 ? Math.min(...rippleDistances) : 0;
+    // Negative shift = move the whole wave earlier so the nearest ring lands at cap.
+    const rippleShift = Math.min(0, rippleStartCap - firstDist * rippleInterval);
+
+    for (let i = 0; i < otherPanels.length; i++) {
+      const p    = otherPanels[i];
+      const dist = rippleDistances[i];
+      const wt   = tDrop + dist * rippleInterval + rippleShift;
+      const rippleTop = floorPos + rippleLift;
+
+      actions.push({ t: wt, run: () => {
+        engine.movePanel(p.x, p.y, p.orient, rippleTop);
+        engine.blinkPanel(p.x, p.y, p.orient, rippleGlow);
       } });
 
-      // Center descends (lit).
-      actions.push({ t: t0 + dropTravelMs, run: () => {
-        engine.sweepTo(centerPanels.map((p) => ({ ...p, target: floorPos })));
-        centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, glowOn));
+      actions.push({ t: wt + riseMs, run: () => {
+        engine.movePanel(p.x, p.y, p.orient, floorPos);
       } });
-
-      // Floor touch: center snaps off; ripple radiates outward.
-      actions.push({ t: tDrop, run: () => {
-        centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, snapOff));
-      } });
-
-      for (const p of otherPanels) {
-        // Use the geometric midpoint of the panel edge for a smooth distance field.
-        const px   = p.x + (p.orient === 'h' ? 0.5 : 0);
-        const py   = p.y + (p.orient === 'h' ? 0   : 0.5);
-        const dist = Math.hypot(px - ccx, py - ccy);
-        const wt   = tDrop + dist * rippleInterval; // wave-front arrival time
-        const rippleTop = floorPos + rippleLift;
-
-        // Lift — panel rises and lights up.
-        actions.push({ t: wt, run: () => {
-          engine.movePanel(p.x, p.y, p.orient, rippleTop);
-          engine.blinkPanel(p.x, p.y, p.orient, rippleGlow);
-        } });
-
-        // Settle — panel returns to the floor.
-        actions.push({ t: wt + riseMs, run: () => {
-          engine.movePanel(p.x, p.y, p.orient, floorPos);
-        } });
-      }
     }
 
+    return actions;
+  },
+
+  /**
+   * particles: N particles travel an Archimedean spiral through a static elastic structure,
+   * briefly rippling each panel (lift + glow) as they pass.
+   *
+   * Structure = elastic catenary: panels held at topPos + (structureHeight - topPos) * falloff * elasticity.
+   * Trajectory = Archimedean spiral mapped to nearest panels by sampling the curve.
+   * N particles are staggered evenly across one full cycle so they chase each other.
+   * With oppose=1, odd-numbered particles traverse the spiral in reverse from the same
+   * start time as their pair — particles travel toward each other from opposite ends.
+   *
+   * @param params.n               number of particles (default 2)
+   * @param params.spiralIn        0 = spiral out from center, 1 = spiral in from periphery (default 0)
+   * @param params.numTurns        spiral turns from center to edge (default 2)
+   * @param params.structureHeight center height for elastic structure (default 128)
+   * @param params.elasticity      elastic falloff strength 0–1 (default 0.9)
+   * @param params.topPos          resting height for periphery panels (default 255)
+   * @param params.speed           ms per step along the trajectory (default 300)
+   * @param params.rippleSize      lift fraction: how far each panel rises above structure (default 0.08)
+   * @param params.rippleFadeout   glow decay time in seconds (default 0.8)
+   * @param params.oppose          1 = odd particles travel reverse spiral in sync with even pair (default 0)
+   * @param params.fadeIn          1 = brightness ramps 0→1 over the first cycle (default 0)
+   */
+  particles(engine, params) {
+    if (params.staticOnly) {
+      const { settleAction } = particlesPlan(engine, params);
+      return [settleAction];
+    }
+    const { settleAction, settleMs, buildBurst } = particlesPlan(engine, params);
+    return [settleAction, ...buildBurst(settleMs)];
+  },
+
+  /**
+   * geo: outlines parts of a 3D box using lit panels at heights that match a
+   * perspective view of the box (back/north = high, front/south = low).
+   * Non-participating panels rest at restPos (up, unlit) — the field is full and dark,
+   * the box edges emerge as glowing panels at their geometrically appropriate heights.
+   *
+   * Shapes:
+   *   corners  — four corner pillar clusters, each at its perspective height
+   *   faces    — N wall (high) + S stepped wall (low): two opposing box faces
+   *   corner   — N wall (high) + W wall (mid): one box corner, two planes meeting
+   *   diagonal — NW-half panels lit and swept from high (NW) down to low (diagonal edge)
+   *
+   * @param params.shape    'corners' | 'faces' | 'corner' | 'diagonal'
+   * @param params.restPos  height for non-participating panels (default 255, all-up)
+   */
+  geo(engine, params) {
+    const restPos = params.restPos ?? 255;
+    const shape   = params.shape ?? 'corners';
+
+    const panels   = engine.list();
+    const cells    = cellsOf(engine);
+    const occupied = new Set(cells.map((c) => `${c.x},${c.y}`));
+
+    const xs    = cells.map((c) => c.x), ys = cells.map((c) => c.y);
+    const minX  = Math.min(...xs), maxX = Math.max(...xs);
+    const minY  = Math.min(...ys), maxY = Math.max(...ys);
+    const spanX = maxX - minX + 1, spanY = maxY - minY + 1;
+
+    const panelXY = (p) => ({
+      px: p.x + (p.orient === 'h' ? 0.5 : 0),
+      py: p.y + (p.orient === 'h' ? 0   : 0.5),
+    });
+
+    const isNorth = (p) => p.orient === 'h' &&  occupied.has(`${p.x},${p.y}`) && !occupied.has(`${p.x},${p.y - 1}`);
+    const isWest  = (p) => p.orient === 'v' &&  occupied.has(`${p.x},${p.y}`) && !occupied.has(`${p.x - 1},${p.y}`);
+    const isEast  = (p) => p.orient === 'v' && !occupied.has(`${p.x},${p.y}`) &&  occupied.has(`${p.x - 1},${p.y}`);
+
+    // The last row that spans the full x width — use its south boundary as the
+    // "full-width south wall", ignoring the stairstepped arm/wedge below it.
+    const maxFullWidthRow    = Math.max(...cells.filter((c) => c.x === maxX).map((c) => c.y));
+    const isFullWidthSouth   = (p) => p.orient === 'h' && p.y === maxFullWidthRow + 1;
+
+    // Four structural corners: north pair equal-high, south pair equal-low.
+    const armMaxX = Math.max(...cells.filter((c) => c.y === maxY).map((c) => c.x), minX);
+    const gCorners = [
+      { pt: [minX,         minY    ], pos: 210 },  // NW — north, high
+      { pt: [maxX + 1,     minY    ], pos: 210 },  // NE — north, high
+      { pt: [minX,         maxY + 1], pos: 40  },  // SW — south, low
+      { pt: [armMaxX + 1,  maxY + 1], pos: 40  },  // SE arm — south, low
+    ];
+    const colRadius = Math.min(spanX, spanY) * 0.35;
+
+    const nearestCornerIdx = (p) => {
+      const { px, py } = panelXY(p);
+      let best = 0, bestD = Infinity;
+      for (let i = 0; i < gCorners.length; i++) {
+        const d = Math.hypot(px - gCorners[i].pt[0], py - gCorners[i].pt[1]);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      return best;
+    };
+    const minCornerDist = (p) => {
+      const { px, py } = panelXY(p);
+      return Math.min(...gCorners.map(({ pt: [gcx, gcy] }) => Math.hypot(px - gcx, py - gcy)));
+    };
+
+    // Returns { pos } for participating panels, null for non-participating.
+    const assign = (p) => {
+      switch (shape) {
+        case 'corners': {
+          if (minCornerDist(p) >= colRadius) return null;
+          return { pos: gCorners[nearestCornerIdx(p)].pos };
+        }
+        case 'faces':
+          if (isNorth(p))          return { pos: 220 };
+          if (isFullWidthSouth(p)) return { pos: 30  };
+          return null;
+        case 'corner':
+          if (isNorth(p)) return { pos: 220 };
+          if (isWest(p))  return { pos: 160 };
+          return null;
+        case 'diagonal': {
+          const { px, py } = panelXY(p);
+          // Restrict to the rectangular full-width zone — ignore the arm/wedge.
+          if (py > maxFullWidthRow + 1) return null;
+          const t = (px - minX) / spanX + (py - minY) / spanY;
+          if (t >= 1.0) return null;
+          // Only outer wall panels — interior panels stay dark at restPos.
+          if (!isNorth(p) && !isFullWidthSouth(p) && !isWest(p) && !isEast(p)) return null;
+          return { pos: Math.round(215 - 185 * t) }; // 215 at NW → ~30 at the diagonal edge
+        }
+        default: return null;
+      }
+    };
+
+    // Participating panels cascade in; non-participating snap to rest immediately.
+    const SWEEP_MS = 800;
+    const delayOf  = (p) => {
+      const { px, py } = panelXY(p);
+      switch (shape) {
+        case 'corners': {
+          const cwOrder = [0, 1, 3, 2]; // NW → NE → SE-arm → SW
+          const ci = cwOrder.indexOf(nearestCornerIdx(p));
+          return (ci < 0 ? 0 : ci) * (SWEEP_MS / 4);
+        }
+        case 'faces':   return isNorth(p) ? 0 : SWEEP_MS * 0.4;
+        case 'corner':  return isNorth(p) ? 0 : SWEEP_MS * 0.45;
+        case 'diagonal': {
+          const t = (px - minX) / spanX + (py - minY) / spanY;
+          return Math.min(t, 1.0) * SWEEP_MS;
+        }
+        default: return 0;
+      }
+    };
+
+    const litBlink  = { attack: 0.2, sustain: 9999, decay: 1.0, peak: 0.9 };
+    const darkBlink = { attack: 0,   sustain: 0,    decay: 0,   peak: 0   };
+
+    const actions = [];
+    for (const p of panels) {
+      const result = assign(p);
+      const pos    = result ? result.pos : restPos;
+      const blink  = result ? litBlink : darkBlink;
+      const t      = result ? Math.round(delayOf(p)) : 0;
+      actions.push({ t, run: () => {
+        engine.movePanel(p.x, p.y, p.orient, pos);
+        engine.blinkPanel(p.x, p.y, p.orient, blink);
+      }});
+    }
     return actions;
   },
 

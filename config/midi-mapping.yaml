@@ -1,0 +1,45 @@
+# Physical maze → MIDI note map, transcribed from the hand-drawn grid.
+#
+# Structure: the maze is read top→bottom as alternating bands of wall panels.
+# Each `grid` row holds:
+#   v: [ ... ]  vertical wall panels (notes sitting on the vertical grid lines)
+#   h: [ ... ]  horizontal wall panels (notes on the horizontal grid lines)
+# Lists run West → East. Row 0 is the North edge.
+#
+# Notation:
+#   ??            panel exists but the note is unreadable in the photo
+#   -             no panel here (outside the L-shaped boundary)
+#   X(Y?)         read as X, but might be Y
+#   $             single illegible character in an otherwise-readable note
+#
+# Note numbers are NOT encoded yet — names only. Convention when we do: D4 = 74.
+
+grid:
+  - y: 0
+    v: [D5 110 G4 D#5(B#5?) - -]
+    h: [A#3 109 C#5 B2 E5 B6]
+  - y: 1
+    v: [A#2 C5 F5 C3(A-1) A#6 A#4]
+    h: [A2 D#1 C#3 F#5 A6 A4]
+  - y: 2
+    v: [D1 G#2 D3 E1 G#4 G5]
+    h: [C#6 G2 C#1 D#0 F1(F7?) D#3(B#3?)]
+  - y: 3
+    v: [F#2 C1 D0 E0 F#1 E3]
+    h: [F2 B0 C#0 B-1 F0 G1]
+  - y: 4
+    v: [E2 F#4 C-0 A#0 G#1 G#5]
+    h: [D6 G#6 F4 D#2 A0 B5]
+  - y: 5
+    v: [F#0 G6 F#3 D2 F3]
+    h: [G0 A1 G3 A5 G#3]
+  - y: 6
+    v: [A#1 E4 A#5 C6?]
+    h: [B3 F#6 D#4 E6]
+  - y: 7
+    v: [G#0 F6 A3]
+    h: [C#2 B1 D#6(B#6?)]
+  - y: 8
+    v: [C2 C#4]
+    h: [C4 D4]
+

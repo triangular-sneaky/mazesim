@@ -33,7 +33,9 @@ export class DemoBank {
     this.engine = opts.engine || null;
 
     this._filter = '';
-    this._collapsed = new Set(opts.collapsed || []); // group names collapsed (seeded, then toggled by the user)
+    this._collapseAll = opts.collapseAll ?? false;
+    this._collapsed  = new Set(opts.collapsed || []);  // explicitly collapsed groups
+    this._expanded   = new Set();                      // explicitly expanded groups (used when collapseAll)
     this._open = new Set();       // interactive movement ids with controls expanded
     this._openParams = new Set(); // ids with param editor expanded
     this._liveParams = new Map(); // id -> current param values (user-editable copy)
@@ -71,6 +73,17 @@ export class DemoBank {
     return `${d.name} ${d.desc || ''}`.toLowerCase().includes(this._filter);
   }
 
+  _toggleGroup(group) {
+    if (this._collapseAll) {
+      if (this._expanded.has(group)) this._expanded.delete(group);
+      else this._expanded.add(group);
+    } else {
+      if (this._collapsed.has(group)) this._collapsed.delete(group);
+      else this._collapsed.add(group);
+    }
+    this._render();
+  }
+
   /** Expand/collapse an interactive movement's inline controls (one open at a time). */
   _toggleControls(id) {
     const wasOpen = this._open.has(id);
@@ -92,6 +105,19 @@ export class DemoBank {
   /** Build a param editor row for one uiParam spec. Mutates the liveP object on change. */
   _paramRow(spec, liveP) {
     if (spec.type === 'panelMap') return this._panelMapRow(spec, liveP);
+
+    if (spec.type === 'checkbox') {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const label = document.createElement('label');
+      label.textContent = spec.label;
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!(liveP[spec.key] ?? 0);
+      cb.addEventListener('change', () => { liveP[spec.key] = cb.checked ? 1 : 0; });
+      row.append(label, cb);
+      return row;
+    }
 
     const val = liveP[spec.key] ?? spec.min;
     const isInt = Number.isInteger(spec.step ?? 1);
@@ -195,7 +221,9 @@ export class DemoBank {
       if (matched.length === 0) continue;
 
       // While searching, force every matching group open so results are visible.
-      const collapsed = this._collapsed.has(group) && !this._filter;
+      const collapsed = !this._filter && (
+        this._collapseAll ? !this._expanded.has(group) : this._collapsed.has(group)
+      );
 
       const header = document.createElement('div');
       header.className = 'demo-group';
@@ -203,11 +231,7 @@ export class DemoBank {
         `<span class="caret">${collapsed ? '▸' : '▾'}</span>` +
         `<span class="grp-name">${group}</span>` +
         `<span class="grp-count">${matched.length}</span>`;
-      header.addEventListener('click', () => {
-        if (this._collapsed.has(group)) this._collapsed.delete(group);
-        else this._collapsed.add(group);
-        this._render();
-      });
+      header.addEventListener('click', () => this._toggleGroup(group));
       this.listEl.append(header);
 
       if (collapsed) continue;

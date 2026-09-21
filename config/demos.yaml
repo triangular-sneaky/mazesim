@@ -1,7 +1,7 @@
 # Movement bank — coordinated panel behaviours.
 # Each movement names a generator (implemented in src/demos/player.js) that builds
 # a timed action list from the live panel set, so it adapts to any layout.
-# Generators: allTo | wave | ripple | mountain | sparkle | scatter | chase
+# Generators: allTo | wave | ripple | mountain | sparkle | scatter | chase | maze | lullaby-drop | particles
 #
 # `group` organizes movements in the UI (with search). Groups appear in the order
 # their first movement is listed here; add new movements with any `group:` to create
@@ -12,8 +12,12 @@
 # A movement with `interactive: true` is driven live by a UI controller (registered
 # in main.js by id) instead of a timeline generator — its row shows collapsible
 # controls rather than a Play button.
+#
+# `loop: true` means the movement re-triggers automatically when its last action fires
+# (i.e. it loops until the user explicitly stops it).
 
 demos:
+  # ---- Transition -----------------------------------------------------------
   - id: all-up
     name: All up
     desc: raise every panel to a target height and turn all lights off
@@ -23,6 +27,7 @@ demos:
     uiParams:
       - { key: position, label: height, min: 0, max: 255, step: 5 }
 
+  # ---- Chase ----------------------------------------------------------------
   - id: chase-top-1
     name: Pattern on top 1
     desc: diagonal chase into a symmetric two-height pattern — slow blinks while moving, then panels and lights hold static; auto-retriggered every period seconds
@@ -58,7 +63,7 @@ demos:
 
   - id: maze
     name: Maze
-    desc: generates a navigatable maze — wall panels drop to low height (lit), passage panels rise (high, lit); new random maze each retrigger
+    desc: generates a navigatable maze — wall panels drop to low height, passage panels rise; new random maze each retrigger
     group: Chase
     generator: maze
     params:
@@ -72,12 +77,107 @@ demos:
       - { key: period, label: period (s), min: 2,  max: 120, step: 1 }
       - { key: _panel_map, type: panelMap, label: walls (down), loKey: topB, hiKey: topA }
 
+  # ---- Lullaby V ------------------------------------------------------------
+  - id: lullaby-drop
+    name: Drop
+    desc: field rests on the floor; center cell bounces — lit on descent, dark on ascent — each impact ripples a lift wave outward, looping until stopped
+    group: Lullaby V
+    generator: lullaby-drop
+    params:
+      floorPos: 0
+      dropLo: 0
+      dropHeight: 200
+      rippleInterval: 400
+      rippleHeight: 0.05
+      rippleFadeout: 1.5
+      loop: true
+    uiParams:
+      - { key: dropLo,         label: drop floor,     min: 0,    max: 200,  step: 5    }
+      - { key: dropHeight,     label: drop peak,      min: 50,   max: 255,  step: 5    }
+      - { key: rippleInterval, label: ripple ms/cell,  min: 50,   max: 5000, step: 25   }
+      - { key: rippleHeight,   label: wave height,    min: 0.01, max: 0.30, step: 0.01 }
+      - { key: rippleFadeout,  label: ripple fadeout, min: 0,    max: 5,    step: 0.1  }
+
+  - id: particles
+    name: Particles
+    desc: N particles spiral through a static elastic structure, rippling each panel as they pass — spiral out from center or in from periphery
+    group: Lullaby V
+    generator: particles
+    params:
+      n: 2
+      spiralIn: 0
+      numTurns: 2
+      structureHeight: 128
+      elasticity: 0.9
+      topPos: 255
+      speed: 300
+      rippleSize: 0.08
+      rippleFadeout: 0.8
+      oppose: 0
+      fadeIn: 0
+      loop: true
+    uiParams:
+      - { key: n,               label: particles,     min: 1,    max: 8,    step: 1    }
+      - { key: spiralIn, label: spiral in, type: checkbox }
+      - { key: oppose,  label: oppose,   type: checkbox }
+      - { key: fadeIn,  label: fade in,  type: checkbox }
+      - { key: structureHeight, label: center height, min: 0,    max: 255,  step: 5    }
+      - { key: elasticity,      label: elasticity,    min: 0,    max: 1,    step: 0.05 }
+      - { key: speed,           label: step ms,       min: 50,   max: 2000, step: 25   }
+      - { key: rippleSize,      label: ripple size,   min: 0.01, max: 0.5,  step: 0.01 }
+      - { key: rippleFadeout,   label: fadeout (s),   min: 0.1,  max: 5,    step: 0.1  }
+
+  - id: lullaby-float
+    name: Float
+    desc: center cell bounces lo↔hi at global speed, always lit; surrounding panels elastically follow — closer = deeper pull, further = dimmer; brightness tracks position live
+    group: Lullaby V
+    interactive: true
+
+  # ---- Flowy poc ------------------------------------------------------------
+  - id: geo-corners
+    name: Corners
+    desc: four corner clusters lit at heights that match a perspective box view — back corners high, front corners low; all other panels up and dark
+    group: Flowy poc
+    generator: geo
+    params: { shape: corners, restPos: 255 }
+    uiParams:
+      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
+
+  - id: geo-faces
+    name: Faces
+    desc: north wall lit high, south stepped wall lit low — two opposing box faces at different depths; all other panels up and dark
+    group: Flowy poc
+    generator: geo
+    params: { shape: faces, restPos: 255 }
+    uiParams:
+      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
+
+  - id: geo-corner
+    name: Corner
+    desc: north wall high + west wall mid — two planes meeting at the NW joint, one lit box corner; all other panels up and dark
+    group: Flowy poc
+    generator: geo
+    params: { shape: corner, restPos: 255 }
+    uiParams:
+      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
+
+  - id: geo-diagonal
+    name: Diagonal
+    desc: NW-half panels lit at heights sweeping from high (NW) down to low (diagonal edge) — a receding slab cut; SE half up and dark
+    group: Flowy poc
+    generator: geo
+    params: { shape: diagonal, restPos: 255 }
+    uiParams:
+      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
+
+  # ---- Interlude ------------------------------------------------------------
   - id: prison
     name: Prison
     desc: click a cell — its 4 edges cage the person, dropping and pulsing; click another to move the cage
     group: interlude
     interactive: true
 
+  # ---- Demos ----------------------------------------------------------------
   - id: wave-ns
     name: Wave (N→S)
     desc: rows rise then settle, north to south
@@ -119,23 +219,6 @@ demos:
     group: Demos
     generator: scatter
     params: { duration: 8000, moves: 60, blinks: 40, minPos: 0, maxPos: 255 }
-
-  - id: lullaby-drop
-    name: Drop
-    desc: field rests on the floor; center cell bounces — lit on descent, dark on ascent — each impact ripples a lift wave outward, lighting up at the crest
-    group: Lullaby V
-    generator: lullaby-drop
-    params:
-      floorPos: 0
-      dropHeight: 200
-      cycles: 6
-      rippleInterval: 400
-      rippleHeight: 0.05
-    uiParams:
-      - { key: dropHeight,     label: drop height,   min: 50,   max: 255,  step: 5    }
-      - { key: cycles,         label: cycles,        min: 1,    max: 20,   step: 1    }
-      - { key: rippleInterval, label: ripple ms/cell, min: 50,  max: 1200, step: 25   }
-      - { key: rippleHeight,   label: wave height,   min: 0.01, max: 0.30, step: 0.01 }
 
   - id: all-down
     name: All down

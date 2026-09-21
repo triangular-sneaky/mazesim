@@ -16,10 +16,13 @@ export class GridMap {
     this.rows = Math.max(...cells.map((c) => c.y)) + 1;
     this.occupied = new Set(cells.map((c) => `${c.x},${c.y}`));
 
-    this.cell = 26;    // px per cell
+    this.cell = 7;    // px per cell
     this.pad = 4;
-    canvas.width = this.cols * this.cell + this.pad * 2;
+    canvas.width  = this.cols * this.cell + this.pad * 2;
     canvas.height = this.rows * this.cell + this.pad * 2;
+    // Pin CSS size to logical pixel size so the container's width:100% can't stretch it.
+    canvas.style.width  = canvas.width  + 'px';
+    canvas.style.height = canvas.height + 'px';
 
     canvas.addEventListener('click', (e) => this._onClick(e));
   }

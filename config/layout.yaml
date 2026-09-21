@@ -30,7 +30,7 @@ motion:
   travelMin: 0.80   # world Y of panel center at position 0 (near floor)
   travelMax: 3.60   # world Y of panel center at position 255 (just below the 3.85 m rail)
   restPosition: 255 # initial position on load (all up)
-  velocity: 25      # cruise speed (position-units/sec) — global default, adjustable live in the UI
+  velocity: 30      # cruise speed (position-units/sec) — global default, adjustable live in the UI
   ease: 0.25        # ramp fraction at each end (0 = pure constant speed, 0.5 = full ease)
   tempoReference: 120 # speed at which movement intervals play literally; timing scales
                       # inversely with `velocity` so movements keep their shape at any speed

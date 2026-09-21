@@ -1,0 +1,343 @@
+<title>Maze Note Map</title>
+<style>
+  :root {
+    --bg:      #0d0e12;
+    --cell:    #14181f;
+    --border:  #1e2530;
+    --note:    #4d9cf6;
+    --unsure:  #8870c0;
+    --idx:     #3a5e38;
+    --label:   #3d4a60;
+    --empty:   #090a0d;
+    --text:    #6a7a98;
+    --hover:   #1c2438;
+    --axis:    #252e40;
+  }
+  :root:not([data-theme="dark"]) {
+    @media (prefers-color-scheme: light) {
+      --bg:     #eceef4;
+      --cell:   #f4f6fc;
+      --border: #ccd0de;
+      --note:   #1a58c0;
+      --unsure: #6048a8;
+      --idx:    #2a5828;
+      --label:  #7888a8;
+      --empty:  #dfe1e8;
+      --text:   #4a5870;
+      --hover:  #e0e4f0;
+      --axis:   #d0d4e0;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:     #eceef4;
+    --cell:   #f4f6fc;
+    --border: #ccd0de;
+    --note:   #1a58c0;
+    --unsure: #6048a8;
+    --idx:    #2a5828;
+    --label:  #7888a8;
+    --empty:  #dfe1e8;
+    --text:   #4a5870;
+    --hover:  #e0e4f0;
+    --axis:   #d0d4e0;
+  }
+  :root[data-theme="dark"] {
+    --bg:      #0d0e12;
+    --cell:    #14181f;
+    --border:  #1e2530;
+    --note:    #4d9cf6;
+    --unsure:  #8870c0;
+    --idx:     #3a5e38;
+    --label:   #3d4a60;
+    --empty:   #090a0d;
+    --text:    #6a7a98;
+    --hover:   #1c2438;
+    --axis:    #252e40;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New', Courier, monospace;
+    padding: 24px 20px 40px;
+    min-height: 100vh;
+  }
+
+  header { margin-bottom: 18px; }
+  h1 {
+    font-size: 13px;
+    font-weight: normal;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--note);
+    margin-bottom: 4px;
+  }
+  .sub {
+    font-size: 11px;
+    color: var(--label);
+    line-height: 1.6;
+  }
+  .sub em { color: var(--unsure); font-style: normal; }
+
+  /* ── grid ────────────────────────────────────────────── */
+  .grid-outer {
+    overflow-x: auto;
+  }
+  .grid-wrap {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .col-row {
+    display: flex;
+    gap: 2px;
+    margin-left: 32px;          /* align with row labels */
+  }
+  .col-hdr {
+    width: 68px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--label);
+    letter-spacing: 0.05em;
+  }
+
+  .grid-row {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+  }
+  .row-hdr {
+    width: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 6px;
+    font-size: 10px;
+    color: var(--label);
+    flex-shrink: 0;
+  }
+
+  .cell {
+    width: 68px;
+    height: 52px;
+    background: var(--cell);
+    border: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    cursor: default;
+    flex-shrink: 0;
+    transition: background 0.08s;
+  }
+  .cell:hover { background: var(--hover); }
+
+  .note-name {
+    font-size: 15px;
+    font-weight: bold;
+    color: var(--note);
+    line-height: 1;
+    letter-spacing: 0.02em;
+  }
+  .note-name.unsure { color: var(--unsure); }
+
+  .p-idx {
+    font-size: 9px;
+    color: var(--idx);
+    line-height: 1;
+  }
+
+  .cell.empty {
+    background: var(--empty);
+    border-color: var(--empty);
+    pointer-events: none;
+  }
+
+  .cell.unknown .note-name {
+    font-size: 12px;
+    color: var(--axis);
+  }
+
+  /* compass labels */
+  .compass {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    padding: 0 2px 0 34px;
+    font-size: 10px;
+    color: var(--label);
+    letter-spacing: 0.12em;
+  }
+
+  /* legend */
+  .legend {
+    margin-top: 16px;
+    display: flex;
+    gap: 22px;
+    font-size: 10px;
+    color: var(--label);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 2px;
+  }
+  .sw-confirmed { background: var(--note); }
+  .sw-unsure    { background: var(--unsure); }
+  .sw-unknown   { background: var(--axis); }
+</style>
+
+<header>
+  <h1>Maze Note Map</h1>
+  <p class="sub">
+    Physical layout → MIDI note. North ↑ top, West ← left. &nbsp;
+    <em>Violet</em> = my reading was uncertain — verify against diagram before patching.
+  </p>
+</header>
+
+<div class="grid-outer">
+  <div id="grid-wrap" class="grid-wrap"></div>
+</div>
+
+<div class="legend">
+  <span><span class="swatch sw-confirmed"></span> confirmed read</span>
+  <span><span class="swatch sw-unsure"></span> uncertain read</span>
+  <span><span class="swatch sw-unknown"></span> panel exists, note unread</span>
+</div>
+
+<script>
+// Each entry: [noteStr, panelIdx, uncertain?]
+// null  = outside maze boundary (empty cell)
+// '?'   = panel exists but note couldn't be read from photo
+//
+// Grid is 7 columns (0=W … 6=E) × 18 rows (0=N … 17=S).
+// L-shape: full width top, narrows toward bottom-right.
+// Readings from handwritten diagram photo — verify against hardware.
+
+const C = null; // outside boundary shorthand
+
+const grid = [
+  // row   0  (N)
+  [ ['D5',15],   ['?'],      ['?'],      ['B4',105], ['C6',24],  ['?'],      ['?']      ],
+  // row   1
+  [ ['A#3',219], ['?'],      ['B2',13],  ['?'],      ['F5',21],  ['?'],      ['B6',31]  ],
+  // row   2
+  [ ['A#2'],     ['?'],      ['C5'],     ['?'],      ['?'],      ['A#6'],    ['A#4',39] ],
+  // row   3
+  [ ['A2',46],   ['?'],      ['D#1',51], ['?'],      ['F#5',53], ['A6',61],  ['A4',62]  ],
+  // row   4
+  [ ['D1'],      ['?'],      ['G#2',71], ['D3',92],  ['E1',84],  ['G#4'],    ['G5',99]  ],
+  // row   5
+  [ ['C#6'],     ['?'],      ['G2',71],  ['C#1',73], ['?'],      ['F7',84],  ['D#3',91] ],
+  // row   6
+  [ ['F#2',108], ['?'],      ['C1',72],  ['D0',114], ['?'],      ['E0',82],  ['E3',192] ],
+  // row   7
+  [ ['F2',101],  ['?'],      ['B0',103], ['?'],      ['B-1',111],['F0',121], ['G1',123] ],
+  // row   8
+  [ ['E2',102],  ['?'],      ['F#4'],    ['C0',112], ['A#0',145],['G#1',122],['G#5',93] ],
+  // row   9
+  [ ['D6',212],  ['?'],      ['G#6'],    ['F4'],     ['D#2'],    ['A0',140], ['B5',193] ],
+  // row  10  (right side starts narrowing)
+  [ ['?'],       ['F#0',159],['G6'],     ['F#3'],    ['D2',142], ['?'],      C          ],
+  // row  11
+  [ ['G0',161],  ['?'],      ['A1',153], ['A5'],     ['G#3',194],C,          C          ],
+  // row  12
+  [ ['?'],       ['A#1'],    ['E4',174], ['A#5'],    ['C6',192], C,          C          ],
+  // row  13
+  [ ['B3',211],  ['?'],      ['F#6',177],['E6',201], C,          C,          C          ],
+  // row  14
+  [ ['?'],       ['G#0',187],['F6',172], ['A3'],     C,          C,          C          ],
+  // row  15
+  [ ['C#2',181], ['?'],      ['B1',183], ['D#6',202],C,          C,          C          ],
+  // row  16
+  [ ['?'],       ['C2',182], ['C#4',203],C,          C,          C,          C          ],
+  // row  17  (S)
+  [ ['C4',205],  ['D4',204], C,          C,          C,          C,          C          ],
+];
+
+const COLS = 7;
+const ROWS = grid.length;
+const COL_LABELS = ['0','1','2','3','4','5','6'];
+const ROW_LABELS = Array.from({length: ROWS}, (_, i) => String(i));
+
+const wrap = document.getElementById('grid-wrap');
+
+// compass bar
+const compass = document.createElement('div');
+compass.className = 'compass';
+compass.innerHTML = '<span>N ↑</span><span>↑ N</span>';
+wrap.appendChild(compass);
+
+// column headers
+const colRow = document.createElement('div');
+colRow.className = 'col-row';
+COL_LABELS.forEach(lbl => {
+  const h = document.createElement('div');
+  h.className = 'col-hdr';
+  h.textContent = lbl;
+  colRow.appendChild(h);
+});
+wrap.appendChild(colRow);
+
+// data rows
+grid.forEach((row, ri) => {
+  const rowEl = document.createElement('div');
+  rowEl.className = 'grid-row';
+
+  const rhdr = document.createElement('div');
+  rhdr.className = 'row-hdr';
+  rhdr.textContent = ROW_LABELS[ri];
+  rowEl.appendChild(rhdr);
+
+  row.forEach(entry => {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+
+    if (entry === null) {
+      cell.classList.add('empty');
+    } else {
+      const [note, idx, uncertain] = Array.isArray(entry) ? entry : [entry];
+
+      if (note === '?') {
+        cell.classList.add('unknown');
+        const n = document.createElement('div');
+        n.className = 'note-name';
+        n.textContent = '?';
+        cell.appendChild(n);
+      } else {
+        const n = document.createElement('div');
+        n.className = 'note-name' + (uncertain ? ' unsure' : '');
+        n.textContent = note;
+        cell.appendChild(n);
+
+        if (idx != null) {
+          const p = document.createElement('div');
+          p.className = 'p-idx';
+          p.textContent = '#' + idx;
+          cell.appendChild(p);
+        }
+      }
+    }
+
+    rowEl.appendChild(cell);
+  });
+
+  wrap.appendChild(rowEl);
+});
+
+// south label
+const south = document.createElement('div');
+south.className = 'compass';
+south.style.marginTop = '4px';
+south.innerHTML = '<span>S ↓</span><span>↓ S</span>';
+wrap.appendChild(south);
+</script>
