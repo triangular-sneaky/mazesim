@@ -740,6 +740,18 @@ export const GENERATORS = {
       return Math.min(...gCorners.map(({ pt: [gcx, gcy] }) => Math.hypot(px - gcx, py - gcy)));
     };
 
+    // Diagonal-shape silhouette helpers (computed once): the easternmost vertical wall in each
+    // row (the E edge), and a north→south height ramp where "down" is the floor.
+    const maxVxByRow = new Map();
+    for (const q of panels) {
+      if (q.orient !== 'v') continue;
+      maxVxByRow.set(q.y, Math.max(maxVxByRow.get(q.y) ?? -Infinity, q.x));
+    }
+    const diagDown = (y, y0, y1) => {
+      const t = y1 > y0 ? Math.max(0, Math.min(1, (y - y0) / (y1 - y0))) : 0;
+      return Math.round(255 * (1 - t)); // 255 (up) at the north end → 0 (floor) at the south end
+    };
+
     // Returns { pos } for participating panels, null for non-participating.
     const assign = (p) => {
       switch (shape) {
@@ -756,14 +768,14 @@ export const GENERATORS = {
           if (isWest(p))  return { pos: 160 };
           return null;
         case 'diagonal': {
-          const { px, py } = panelXY(p);
-          // Restrict to the rectangular full-width zone — ignore the arm/wedge.
-          if (py > maxFullWidthRow + 1) return null;
-          const t = (px - minX) / spanX + (py - minY) / spanY;
-          if (t >= 1.0) return null;
-          // Only outer wall panels — interior panels stay dark at restPos.
-          if (!isNorth(p) && !isFullWidthSouth(p) && !isWest(p) && !isEast(p)) return null;
-          return { pos: Math.round(215 - 185 * t) }; // 215 at NW → ~30 at the diagonal edge
+          // Flowie "Diagonal": the N wall stays up; the W and E walls drape diagonally down
+          // north→south; the whole SE staircase cut sits on the floor. All these lit, rest off.
+          if (p.orient === 'h' && p.y === minY) return { pos: 255 };                        // N wall — up
+          if (p.orient === 'v' && p.x === minX) return { pos: diagDown(p.y, minY, maxY) };  // W wall — diag down (full height)
+          if (p.orient === 'v' && p.x === maxVxByRow.get(p.y) && p.y <= maxFullWidthRow)
+            return { pos: diagDown(p.y, minY, maxFullWidthRow) };                            // E wall — diag down (shorter, north block)
+          if (p.y > maxFullWidthRow) return { pos: 0 };                                      // SE cut — all down
+          return null;                                                                       // everything else — off
         }
         default: return null;
       }

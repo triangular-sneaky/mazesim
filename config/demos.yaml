@@ -133,11 +133,11 @@ demos:
     group: Lullaby V
     interactive: true
 
-  # ---- Flowy poc ------------------------------------------------------------
+  # ---- Flowie ------------------------------------------------------------
   - id: geo-corners
     name: Corners
     desc: four corner clusters lit at heights that match a perspective box view — back corners high, front corners low; all other panels up and dark
-    group: Flowy poc
+    group: Flowie
     generator: geo
     params: { shape: corners, restPos: 255 }
     uiParams:
@@ -146,7 +146,7 @@ demos:
   - id: geo-faces
     name: Faces
     desc: north wall lit high, south stepped wall lit low — two opposing box faces at different depths; all other panels up and dark
-    group: Flowy poc
+    group: Flowie
     generator: geo
     params: { shape: faces, restPos: 255 }
     uiParams:
@@ -155,7 +155,7 @@ demos:
   - id: geo-corner
     name: Corner
     desc: north wall high + west wall mid — two planes meeting at the NW joint, one lit box corner; all other panels up and dark
-    group: Flowy poc
+    group: Flowie
     generator: geo
     params: { shape: corner, restPos: 255 }
     uiParams:
@@ -163,8 +163,8 @@ demos:
 
   - id: geo-diagonal
     name: Diagonal
-    desc: NW-half panels lit at heights sweeping from high (NW) down to low (diagonal edge) — a receding slab cut; SE half up and dark
-    group: Flowy poc
+    desc: N wall up; W and E walls drape diagonally down north→south; the whole SE staircase cut sits on the floor — all lit, everything else off
+    group: Flowie
     generator: geo
     params: { shape: diagonal, restPos: 255 }
     uiParams:

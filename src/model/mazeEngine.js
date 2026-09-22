@@ -1,5 +1,5 @@
 import { PanelEngine } from './engine.js';
-import { planMove, posToZ, brightToVel } from './mazeState.js';
+import { planMove, planStay, posToZ, brightToVel } from './mazeState.js';
 
 /**
  * MazeEngine — the state-backed engine adapter.
@@ -43,12 +43,18 @@ export class MazeEngine extends PanelEngine {
 
   /**
    * Combined MOVE + LIGHT — the single primitive movements call. Snap the raw target to the
-   * nearest tracked z, plan the minimal note-ons from current belief, and — if output is on —
-   * emit them at velocity = `brightness` (on the real maze a note-on both steps AND sets the
-   * light, so move and light are one call). Commit the resulting belief. Does NOT glide the
-   * Panel — the HUD tick renders belief. `brightness` is 0..1 (null keeps the current light);
-   * `duration` ms schedules an automatic off(). Dead panels and no-op moves send nothing;
-   * a light change with no step (steps === 0) updates belief only — the deferred light-in-place.
+   * nearest tracked z, plan the note-ons from current belief, and — if output is on — emit them
+   * at velocity = `brightness` (on the real maze a note-on both steps AND sets the light, so
+   * move and light are one call). Commit the resulting belief. Does NOT glide the Panel — the
+   * HUD tick renders belief. `brightness` is 0..1 (null keeps the current light); `duration` ms
+   * schedules an automatic off().
+   *
+   * The engine NEVER generates a 0-step move: a move is a physical action, always ≥1 note-on.
+   * When the target equals the current height, planMove would be 0 steps, so we substitute an
+   * in-place STAY — walk to the near wall and back (non-zero; a full 16-step loop at an
+   * endpoint). That keeps the light strike on the wire and belief consistent with the maze
+   * (light can only ride a note-on, so "light in place" costs a real stay). Dead panels only
+   * are skipped.
    */
   move(x, y, orient, target, brightness = null, duration = null) {
     const note = this.noteAt(x, y, orient);
@@ -60,8 +66,9 @@ export class MazeEngine extends PanelEngine {
 
     const zT = posToZ(Math.max(0, Math.min(255, target)));
     const onVel = brightness == null ? p.brightness : brightToVel(brightness); // 0..127; null = keep
-    const { steps, newState } = planMove(p.z, p.v, zT);
-    if (steps > 0 && this.midi?.enabled) {
+    let { steps, newState } = planMove(p.z, p.v, zT);
+    if (steps === 0) ({ steps, newState } = planStay(p.z, p.v)); // never a 0-step move: stay in place
+    if (this.midi?.enabled) {
       this.midi.sendSteps(new Map([[note, { steps, vel: Math.max(1, onVel) }]]));
     }
     this.state.commit(note, newState, onVel);

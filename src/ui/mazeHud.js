@@ -133,9 +133,12 @@ export class MazeHud {
     const zeroBtn = mkBtn('Fix to 0', () => this.resetAtZero());
     zeroBtn.classList.add('danger');
     zeroBtn.title = 'Assume every panel is home: fix tracked belief to 0+ (no MIDI, no movement)';
+    const topBtn = mkBtn('Fix to 8-', () => this.resetAtTop());
+    topBtn.classList.add('danger');
+    topBtn.title = 'Assume every panel is at the top: fix tracked belief to 8- (no MIDI, no movement)';
     const panicBtn = mkBtn('panic', () => { if (this.midi.enabled) this.midi.panic(); });
     panicBtn.title = 'All lights off (no movement)';
-    g1.append(stepAllBtn, zeroBtn, panicBtn);
+    g1.append(stepAllBtn, zeroBtn, topBtn, panicBtn);
 
     const g2 = document.createElement('div');
     g2.className = 'row';
@@ -394,6 +397,21 @@ export class MazeHud {
     for (const p of this.state.list()) {
       if (p.dead) continue;
       this.state.commit(p.note, { z: 0, v: 1 }, p.brightness);
+      this._fastReset.add(p.note);
+    }
+    this._lastMirroredPos.clear();
+    this._refreshCard();
+  }
+
+  /**
+   * Assume every panel is at the top at 8- (z=N, v=-1): fix tracked belief only, NO midi — a
+   * bulk "Fix" (the natural post-arrival state at the top, ready to descend). Nothing
+   * physically moves; the 3D mirror glides up fast (belief reset).
+   */
+  resetAtTop() {
+    for (const p of this.state.list()) {
+      if (p.dead) continue;
+      this.state.commit(p.note, { z: N, v: -1 }, p.brightness);
       this._fastReset.add(p.note);
     }
     this._lastMirroredPos.clear();
