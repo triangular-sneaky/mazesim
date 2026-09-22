@@ -192,30 +192,49 @@ test('delayMs spaces messages WITHIN a unit on the wire', () => {
   }
 });
 
-// ---- supersede / cancel -----------------------------------------------------
+// ---- append / flush ---------------------------------------------------------
 
-test('a new run supersedes the previous — pending units of the old run never fire', () => {
+test('a later send APPENDS to the queue — nothing is superseded, everything drains in order', () => {
   const { c, clock, sends } = makeController({ rateHz: 300, burst: 64, delayMs: 0 });
-  // Run A: two notes. Only A's first unit sends synchronously; the 2nd waits on a timer.
+  // Send A: two notes. A's first unit dispatches synchronously; the 2nd is queued.
   c.sendSteps(new Map([[10, { steps: 1, vel: 1 }], [11, { steps: 1, vel: 1 }]]));
-  const runIdAfterA = c._runId;
-  // Run B before draining: cancels A's pending timer (bumps runId), sends B's first unit.
+  // Send B before draining: appends behind A's remaining unit (does NOT cancel it).
   c.sendSteps(new Map([[20, { steps: 1, vel: 1 }], [21, { steps: 1, vel: 1 }]]));
-  assert.ok(c._runId > runIdAfterA, '_cancel bumped the run id');
   clock.drain();
-  const notes = new Set(sends.map((s) => s.data[1]));
-  assert.ok(notes.has(10), "A's first unit already reached the wire");
-  assert.ok(!notes.has(11), "A's superseded second unit must NOT fire");
-  assert.ok(notes.has(20) && notes.has(21), 'B runs to completion');
+  const order = sends.filter((s) => s.data[0] === 0x90).map((s) => s.data[1]);
+  // All four fire, A fully before B (FIFO), because the shared bucket had budget.
+  assert.deepEqual(order, [10, 11, 20, 21], 'FIFO: A then B, none dropped');
 });
 
-test('_cancel clears pending timers and stops the run', () => {
+test('the token bucket holds ACROSS separate sends (the inverted per-panel drive path)', () => {
+  // burst=2 (one unit's worth), rate=1000 -> 2 tokens/2ms. Four SEPARATE single-note sends
+  // (as MazeEngine.movePanel issues them) must still be throttled to a 2ms/unit cadence,
+  // not each granted a fresh full bucket.
+  const { c, clock, sends } = makeController({ rateHz: 1000, burst: 2, delayMs: 0 });
+  for (const n of [60, 61, 62, 63]) c.sendSteps(new Map([[n, { steps: 1, vel: 1 }]]));
+  clock.drain();
+  const unitWhen = [60, 61, 62, 63].map((n) => sends.find((s) => s.data[1] === n).when);
+  assert.deepEqual(unitWhen, [1, 3, 5, 7], 'sustained ceiling holds across independent sends');
+});
+
+test('_cancel flushes the queue: only already-dispatched units survive', () => {
   const { c, clock, sends } = makeController({ rateHz: 300, burst: 64, delayMs: 0 });
   c.sendSteps(new Map([[10, { steps: 1, vel: 1 }], [11, { steps: 1, vel: 1 }]]));
   c._cancel();
   clock.drain();
   const notes = new Set(sends.map((s) => s.data[1]));
-  assert.ok(notes.has(10) && !notes.has(11), 'only the already-dispatched unit survives cancel');
+  assert.ok(notes.has(10) && !notes.has(11), 'only the already-dispatched unit survives flush');
+});
+
+test('panic flushes an in-flight paced run before sending its note-offs', () => {
+  const { c, clock, sends } = makeController({ rateHz: 300, burst: 64, delayMs: 0 });
+  c.sendSteps(new Map([[10, { steps: 1, vel: 1 }], [11, { steps: 1, vel: 1 }]]));
+  c.panic();                       // must cancel the queued tail (note 11) and kill all lights
+  clock.drain();
+  const stepOns = sends.filter((s) => s.data[0] === 0x90).map((s) => s.data[1]);
+  assert.ok(!stepOns.includes(11), 'panic dropped the queued step for note 11');
+  const offs = sends.filter((s) => s.data[0] === 0x80 && s.data[2] === 0);
+  assert.equal(offs.length >= 128, true, 'panic still emitted a note-off for every note 0..127');
 });
 
 // ---- move() wrapper ---------------------------------------------------------

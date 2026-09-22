@@ -16,6 +16,11 @@ export class PanelMeshes {
     // Diffuse color hit by room lights when a panel is OFF (emissive glow ignores this).
     // Darken in layout.yaml to widen the on/off contrast without touching the glow.
     this.panelColor = new THREE.Color(config.panel.color ?? '#fff6e8');
+    this.selectedColor = new THREE.Color(0x9ec5ff); // highlight for the picked panel
+    this.deadColor = new THREE.Color(0x3a3d42);     // greyed-out dead panels (unlit)
+
+    this.selectedKey = null;      // currently highlighted panel key (or null)
+    this.deadKeys = new Set();    // panel keys parked as dead: grey + unlit
 
     /** @type {Map<string,{mesh:THREE.Mesh, line:THREE.Line, panel:object}>} */
     this.items = new Map();
@@ -98,14 +103,11 @@ export class PanelMeshes {
     }
   }
 
-  /** Highlight a selected panel (or clear with null). */
-  setSelected(key) {
-    for (const [k, item] of this.items) {
-      const selected = k === key;
-      if (selected) item.mesh.material.color.set(0x9ec5ff);
-      else item.mesh.material.color.copy(this.panelColor);
-    }
-  }
+  /** Highlight a selected panel (or clear with null). Applied in sync(). */
+  setSelected(key) { this.selectedKey = key; }
+
+  /** Mark a set of panel keys dead: greyed and forced unlit. Applied in sync(). */
+  setDead(keys) { this.deadKeys = new Set(keys); }
 
   /** Push current engine state into the meshes. Call every frame. */
   sync() {
@@ -114,7 +116,17 @@ export class PanelMeshes {
       const p = item.panel;
       const pl = g.placement(p);
       item.mesh.position.set(pl.center.x, pl.center.y, pl.center.z);
-      item.mesh.material.emissiveIntensity = this.baseEmissive + p.brightness * this.glowRange;
+
+      // Color + glow: dead panels are grey and unlit; otherwise selected → highlight,
+      // else the base diffuse, with emissive tracking brightness.
+      const dead = this.deadKeys.has(p.key);
+      if (dead) {
+        item.mesh.material.color.copy(this.deadColor);
+        item.mesh.material.emissiveIntensity = 0;
+      } else {
+        item.mesh.material.color.copy(p.key === this.selectedKey ? this.selectedColor : this.panelColor);
+        item.mesh.material.emissiveIntensity = this.baseEmissive + p.brightness * this.glowRange;
+      }
 
       // String: from ceiling straight down to panel top.
       const topY = pl.center.y + g.panelHeight / 2;

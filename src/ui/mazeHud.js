@@ -14,21 +14,20 @@
  * Selecting a panel opens a shared control card (flip / correct / step×1 / set-z /
  * mark-dead) — one card instead of 86×5 live buttons.
  *
- * "Apply scene" snapshots the current sim pose (position + brightness per panel) as the
- * desired Scene and drives reality to match. "Mirror to 3D" (on by default) re-asserts
- * tracked belief back onto the sim so the 3D view reflects the physical maze rather than
- * the design pose; turn it off to let the demos drive the sim freely.
+ * "Mirror→3D" (on by default) re-asserts tracked belief back onto the sim so the 3D view
+ * reflects the physical maze (state) rather than the design pose; turn it off to let the
+ * demos drive the sim freely. Dead panels are parked at the top, unlit and greyed.
  */
-import { N, CYCLE, aOf, applyN, planMove, planStay } from '../model/mazeState.js';
+import { N, CYCLE, aOf, applyN, planMove, planStay, zToPos, posToZ, brightToVel } from '../model/mazeState.js';
 
-export const zToPos = (z) => Math.round((z / N) * 255);   // tracked height 0..N -> sim position 0..255
-export const posToZ = (pos) => Math.round((pos / 255) * N);
-export const brightToVel = (b01) => (b01 > 0.01 ? Math.max(1, Math.min(127, Math.round(b01 * 127))) : 0);
+// Re-exported for callers (and tests) that historically imported them from the HUD; the
+// definitions now live in the pure model so the engine adapter can share them.
+export { zToPos, posToZ, brightToVel };
 
 /**
  * Pure scene planner: given tracked panels and a sim-pose lookup, decide the per-panel
- * step plan + tracked-state commits needed to drive reality to the current sim pose.
- * Kept free of DOM/MIDI so it's unit-testable; `applyScene` wires it to the transport.
+ * step plan + tracked-state commits needed to drive reality to a target sim pose.
+ * Kept free of DOM/MIDI so it's unit-testable; a caller wires it to the transport.
  *
  * Per non-dead panel with a resolvable sim pose:
  *   - target height differs   → planMove (light at vel, min 1 so any move is visible)
@@ -65,7 +64,7 @@ export class MazeHud {
   /**
    * @param {HTMLElement} container   sidebar section body to mount the panel UI into
    * @param {object} opts
-   * @param {import('../model/engine.js').PanelEngine} opts.engine
+   * @param {import('../model/mazeEngine.js').MazeEngine} opts.engine
    * @param {import('../model/grid.js').Grid} opts.grid
    * @param {import('../render/scene.js').SceneView} opts.view
    * @param {import('../model/mazeState.js').MazeState} opts.state
@@ -73,19 +72,19 @@ export class MazeHud {
    * @param {HTMLElement} opts.viewport   the #viewport element (for the overlay layer)
    * @param {{x:number,y:number}[]} opts.cells
    */
-  constructor(container, { engine, grid, view, state, midi, viewport, cells }) {
+  constructor(container, { engine, grid, view, state, midi, viewport, cells, meshes }) {
     this.engine = engine;
     this.grid = grid;
     this.view = view;
     this.state = state;
     this.midi = midi;
+    this.meshes = meshes;       // 3D panel meshes (for greying dead panels); may be absent
     this.viewport = viewport;
 
-    // Both views are always live: the 2D top-down canvas AND the virtual chips over the
-    // 3D scene. "mirror→3D" re-asserts tracked belief onto the sim so the 3D panels (and
-    // thus the chips floating on them) reflect what we believe — ON by default so the 3D
-    // view is the physical maze; turn it off to let the demos drive the sim freely.
-    this.mirror = true;         // mirror tracked belief -> sim (off: sim stays free)
+    // Both views are always live: the 2D top-down canvas AND the virtual chips over the 3D
+    // scene. The 3D sim always mirrors tracked belief — with the movement→state inversion the
+    // sim is a READOUT of the physical maze, not something the demos paint, so there is no
+    // longer anything to toggle: this.tick() drives the sim to belief every frame.
     this.selectedNote = null;
     this._lastMirroredPos = new Map();  // note -> last sim position we drove (change-detect)
     this._fastReset = new Set();        // notes whose NEXT mirror drive is a belief-only
@@ -108,40 +107,27 @@ export class MazeHud {
   // ---- dead-note guard sync -------------------------------------------------
 
   _syncDead() {
-    this.midi.deadNotes = new Set(this.state.list().filter((p) => p.dead).map((p) => p.note));
+    const dead = this.state.list().filter((p) => p.dead);
+    this.midi.deadNotes = new Set(dead.map((p) => p.note));      // hard MIDI send-ban
+    if (this.meshes) this.meshes.setDead(dead.map((p) => `${p.x},${p.y},${p.orient}`)); // grey in 3D
   }
 
   // ---- UI --------------------------------------------------------------------
 
   _buildUI(container) {
-    // Header: both views are always live (2D canvas below + virtual chips over the 3D).
-    // The only header control is mirror→3D (drive the sim to tracked belief).
+    // Header: both views are always live (2D canvas below + virtual chips over the 3D), and
+    // the 3D sim always mirrors tracked belief — nothing to toggle.
     const head = document.createElement('div');
     head.className = 'row';
     const viewsNote = document.createElement('span');
     viewsNote.className = 'hint';
     viewsNote.style.margin = '0';
-    viewsNote.textContent = '2D + virtual — both live';
-
-    const mirrorLabel = document.createElement('label');
-    mirrorLabel.className = 'toggle';
-    mirrorLabel.style.marginLeft = 'auto';
-    this._mirrorCheck = document.createElement('input');
-    this._mirrorCheck.type = 'checkbox';
-    this._mirrorCheck.checked = this.mirror;   // on by default
-    this._mirrorCheck.addEventListener('change', () => {
-      this.mirror = this._mirrorCheck.checked;
-      this._lastMirroredPos.clear(); // force a re-drive of every panel next tick
-    });
-    mirrorLabel.append(this._mirrorCheck, document.createTextNode(' mirror→3D'));
-    head.append(viewsNote, mirrorLabel);
+    viewsNote.textContent = '2D + virtual — both live, 3D mirrors belief';
+    head.append(viewsNote);
 
     // Global actions.
     const g1 = document.createElement('div');
     g1.className = 'row';
-    const applyBtn = mkBtn('Apply scene', () => this.applyScene());
-    applyBtn.classList.add('primary');
-    applyBtn.title = 'Drive the physical maze to match the current 3D pose (position + light)';
     const stepAllBtn = mkBtn('1 step all', () => this.reset());
     stepAllBtn.title = 'Send one step to every panel so you can verify each one moves as tracked';
     const zeroBtn = mkBtn('Fix to 0', () => this.resetAtZero());
@@ -149,7 +135,7 @@ export class MazeHud {
     zeroBtn.title = 'Assume every panel is home: fix tracked belief to 0+ (no MIDI, no movement)';
     const panicBtn = mkBtn('panic', () => { if (this.midi.enabled) this.midi.panic(); });
     panicBtn.title = 'All lights off (no movement)';
-    g1.append(applyBtn, stepAllBtn, zeroBtn, panicBtn);
+    g1.append(stepAllBtn, zeroBtn, panicBtn);
 
     const g2 = document.createElement('div');
     g2.className = 'row';
@@ -182,8 +168,8 @@ export class MazeHud {
     hint.className = 'hint';
     hint.textContent =
       '2D + virtual view of tracked belief. Click a panel to select. Move = send MIDI + ' +
-      'update belief (real movement); Fix = correct belief only, no MIDI. Apply scene ' +
-      'pushes the 3D pose to the real maze.';
+      'update belief (real movement); Fix = correct belief only, no MIDI. The 3D maze ' +
+      'mirrors this tracked state.';
 
     container.append(head, g1, g2, this._canvas, this._card, hint);
     this._refreshCard();
@@ -376,29 +362,10 @@ export class MazeHud {
 
   _afterChange() {
     this._refreshCard();
-    if (this.mirror) this._lastMirroredPos.delete(this.selectedNote); // re-drive on change
+    this._lastMirroredPos.delete(this.selectedNote); // re-drive this panel next tick
   }
 
   // ---- scene / reset ---------------------------------------------------------
-
-  /**
-   * Snapshot the current sim pose as the desired Scene and drive reality to match:
-   * per non-dead panel, plan to the sim's height and light. Panels already at their
-   * target with light on get a re-light stay; dark-in-place panels are left alone
-   * (use panic / per-panel controls to darken).
-   */
-  applyScene() {
-    if (!this._guard()) return;
-    const { plan, commits } = computeScenePlan(
-      this.state.list(),
-      (p) => this.engine.get(p.x, p.y, p.orient),
-    );
-    if (!plan.size) { this.midi._setStatus('scene already matches tracked state', false); return; }
-    this.midi.sendSteps(plan);
-    for (const [note, ns, vel] of commits) this.state.commit(note, ns, vel);
-    this._lastMirroredPos.clear();
-    this._refreshCard();
-  }
 
   /**
    * Send exactly one step to every non-dead panel (paced by the transport's guards),
@@ -482,14 +449,17 @@ export class MazeHud {
 
   // ---- frame hooks -----------------------------------------------------------
 
-  /** Mirror tracked belief onto the sim (brightness every frame; position on change). */
+  /** Mirror tracked belief onto the sim (brightness every frame; position on change). This is
+   *  the SOLE renderer of belief -> sim; it uses engine.renderMove (a raw glide) so it never
+   *  re-enters the state/MIDI path that the engine's movePanel now routes through. */
   tick(_dt) {
-    if (!this.mirror) return;
     for (const p of this.state.list()) {
       const sim = this.engine.get(p.x, p.y, p.orient);
-      if (!sim || p.dead) continue;
-      sim.brightness = p.brightness / 127;
-      const pos = zToPos(p.z);
+      if (!sim) continue;
+      // Dead panels are parked at the top (pos 255) and dark — they take no part in
+      // scenes; the mesh greys them (via meshes.setDead). Live panels mirror belief.
+      const pos = p.dead ? 255 : zToPos(p.z);
+      sim.brightness = p.dead ? 0 : p.brightness / 127;
       if (this._lastMirroredPos.get(p.note) !== pos) {
         // Choose the drive speed for this render-side re-sync:
         //  - initial load  → snap instantly (velocity 0): open already showing belief.
@@ -499,7 +469,7 @@ export class MazeHud {
         if (this._snapInit.delete(p.note)) opts = { velocity: 0 };
         else if (this._fastReset.delete(p.note)) opts = { velocity: this.engine.speed * this._RESET_SPEEDUP };
         else opts = {};
-        this.engine.movePanel(p.x, p.y, p.orient, pos, opts);
+        this.engine.renderMove(p.x, p.y, p.orient, pos, opts);
         this._lastMirroredPos.set(p.note, pos);
       }
     }

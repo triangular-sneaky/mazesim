@@ -50,8 +50,17 @@ export class MazeMidiController {
     this.access     = null;
     this.selectedOutputId = null;
 
-    this._runId  = 0;    // bumped to invalidate an in-flight paced run
-    this._timers = [];   // pending timer ids for the current run
+    // Persistent paced-send queue: every send APPENDS units to one FIFO drained by a single
+    // long-lived pump under ONE token bucket, so the rate/burst guards hold across all callers
+    // (movements, HUD, sweeps) no matter how sends arrive. Normal sends never cancel prior work
+    // — only panic()/_cancel() flush the queue. (The inverted drive fires many small sends;
+    // a per-send bucket would reset the budget each time and defeat the ceiling.)
+    this._queue      = [];     // FIFO of units (each = messages sent contiguously, never split)
+    this._draining   = false;  // is the drain pump active?
+    this._pumpTimer  = null;   // the single in-flight drain timer id
+    this._tokens     = this.burst; // token-bucket level (persists across enqueues)
+    this._lastRefill = null;   // last token refill timestamp (set on first pump)
+    this._out        = null;   // output resolved at enqueue time
 
     // Hard guard: notes here are never sent (belt-and-suspenders with the HUD's own
     // dead filter). The HUD keeps this in sync with tracked `dead` panels.
@@ -65,7 +74,12 @@ export class MazeMidiController {
 
     // Skip DOM construction in a headless (test) context — everything below the wire
     // (pacing, guards, sends) works without the UI, which `_setStatus` no-ops against.
-    if (typeof document !== 'undefined') this._buildUI();
+    // Output is ON by default in the browser (auto-requests MIDI + selects UM-ONE); headless
+    // stays disabled so tests never touch navigator.requestMIDIAccess.
+    if (typeof document !== 'undefined') {
+      this._buildUI();
+      this.enable(true);
+    }
   }
 
   // ---- Sending --------------------------------------------------------------
@@ -119,7 +133,7 @@ export class MazeMidiController {
     const lo = Math.min(...entries.map(([n]) => n));
     const hi = Math.max(...entries.map(([n]) => n));
     const mode = this.interleave ? 'interleaved' : 'sequential';
-    return this._pace(out, units, `notes ${lo}–${hi} · ${pairs} pairs · ${mode}`, entries.length);
+    return this._enqueue(out, units, `notes ${lo}–${hi} · ${pairs} pairs · ${mode}`, entries.length);
   }
 
   /**
@@ -150,7 +164,7 @@ export class MazeMidiController {
       noteCount++; totalSteps += steps;
     }
     if (!units.length) { this._setStatus('nothing to send (0 steps / all dead)', false); return false; }
-    return this._pace(out, units, `${noteCount} notes · ${totalSteps} steps · notes ${lo}–${hi}`, noteCount);
+    return this._enqueue(out, units, `${noteCount} notes · ${totalSteps} steps · notes ${lo}–${hi}`, noteCount);
   }
 
   /**
@@ -168,64 +182,74 @@ export class MazeMidiController {
       units.push([[0x80, note, 0]]);
     }
     if (!units.length) { this._setStatus('nothing to turn off', false); return false; }
-    return this._pace(out, units, `${units.length} notes off (no move)`, units.length);
+    return this._enqueue(out, units, `${units.length} notes off (no move)`, units.length);
   }
 
   /**
-   * Token-bucket paced sender shared by move/sendSteps/sendOff. `units` are message
-   * groups sent contiguously (never split): refill `rate` msgs/sec (sustained ceiling),
-   * capacity `cap` msgs (burst budget). Intra-unit messages are timestamp-scheduled
-   * `step` apart; unit-to-unit cadence uses real setTimeout so it holds even if the
-   * browser ignores send timestamps.
+   * Append message `units` to the shared paced queue (shared by move/sendSteps/sendOff).
+   * Units are message groups sent contiguously (never split). ONE long-lived pump drains
+   * the queue under a single token bucket — refill `rateHz` msgs/sec (sustained ceiling),
+   * capacity `burst` msgs — so the guards hold across every caller and every send, however
+   * they arrive. Appending never cancels prior work; only panic()/_cancel() flush.
    */
-  _pace(out, units, label, noteCount) {
-    this._cancel();                                // supersede any in-flight run
-    const runId = this._runId;
-    const total = units.reduce((n, u) => n + u.length, 0);
-    const step  = Math.max(0, this.delayMs);
-    this._setStatus(`sending ${total} msgs · ${label}…`, true);
-    if (this._activityEl) this._activityEl.textContent = `${noteCount} notes → ${total} msgs`;
-
-    const rate = Math.max(1, this.rateHz);
-    const cap  = Math.max(1, this.burst | 0);
-    let tokens = cap;                              // start full
-    let last   = this._now();
-
-    const pump = (i) => {
-      if (runId !== this._runId) return;           // cancelled / superseded
-      if (i >= units.length) {
-        this._setStatus(`sent ${total} msgs · ${label}`, true);
-        return;
-      }
-      const now = this._now();
-      tokens = Math.min(cap, tokens + (now - last) / 1000 * rate);
-      last = now;
-
-      const cost = units[i].length;
-      const need = Math.min(cost, cap);            // waiting past a full bucket never helps
-      if (tokens < need) {
-        const waitMs = Math.ceil((need - tokens) / rate * 1000);
-        this._timers.push(this._schedule(() => pump(i), waitMs));
-        return;
-      }
-
-      let when = now + 1;                          // tiny lead so all sends are scheduled
-      for (const m of units[i]) { out.send(m, when); when += step; }
-      tokens -= cost;
-
-      const unitDur = Math.max(1, cost * step);    // wall time this unit occupies the wire
-      this._timers.push(this._schedule(() => pump(i + 1), unitDur));
-    };
-
-    pump(0);
+  _enqueue(out, units, label, noteCount) {
+    this._out = out;                               // most recent output wins for the drain
+    for (const u of units) this._queue.push(u);
+    const added = units.reduce((n, u) => n + u.length, 0);
+    this._setStatus(`queued ${this._queue.length} units · ${label}…`, true);
+    if (this._activityEl) this._activityEl.textContent = `${noteCount} notes → +${added} msgs`;
+    if (!this._draining) { this._draining = true; this._pump(); }
     return true;
   }
 
-  /** Cancel any in-flight paced run (clears pending timers, invalidates callbacks). */
+  /**
+   * Drain one unit from the queue front under the persistent token bucket, then reschedule
+   * itself. Intra-unit messages are timestamp-scheduled `delayMs` apart; unit-to-unit cadence
+   * uses real setTimeout so it holds even if the browser ignores send timestamps. Idle time
+   * between drains refills the bucket (capped), so a burst after a lull is still allowed.
+   */
+  _pump() {
+    if (!this._queue.length) {                     // drained: park until the next enqueue
+      this._draining = false;
+      this._pumpTimer = null;
+      this._setStatus('idle — queue drained', true);
+      return;
+    }
+    const out  = this._out;
+    const rate = Math.max(1, this.rateHz);
+    const cap  = Math.max(1, this.burst | 0);
+    const step = Math.max(0, this.delayMs);
+
+    const now = this._now();
+    if (this._lastRefill == null) this._lastRefill = now;
+    this._tokens = Math.min(cap, this._tokens + (now - this._lastRefill) / 1000 * rate);
+    this._lastRefill = now;
+
+    const unit = this._queue[0];
+    const cost = unit.length;
+    const need = Math.min(cost, cap);              // waiting past a full bucket never helps
+    if (this._tokens < need) {
+      const waitMs = Math.ceil((need - this._tokens) / rate * 1000);
+      this._pumpTimer = this._schedule(() => this._pump(), waitMs);
+      return;
+    }
+
+    this._queue.shift();
+    let when = now + 1;                            // tiny lead so all sends are scheduled
+    for (const m of unit) { out.send(m, when); when += step; }
+    this._tokens -= cost;
+
+    const unitDur = Math.max(1, cost * step);      // wall time this unit occupies the wire
+    this._pumpTimer = this._schedule(() => this._pump(), unitDur);
+  }
+
+  /** Flush the paced queue: drop all pending units and stop the pump. Used by panic() (and
+   *  any explicit "stop everything" path); already-dispatched messages can't be unsent. */
   _cancel() {
-    for (const t of this._timers) this._unschedule(t);
-    this._timers = [];
-    this._runId++;
+    if (this._pumpTimer != null) this._unschedule(this._pumpTimer);
+    this._pumpTimer = null;
+    this._queue = [];
+    this._draining = false;
   }
 
   /** Kill every light: one note-off (0x80) per note 0–127. No movement. */
@@ -270,8 +294,12 @@ export class MazeMidiController {
       opts.push(`<option value="${out.id}">${out.name || out.id}</option>`);
     }
     this._outputSel.innerHTML = opts.join('') || '<option value="">no outputs found</option>';
-    const ids = [...this.access.outputs.keys()];
-    this.selectedOutputId = ids.includes(prev) ? prev : (ids[0] ?? null);
+    const outs = [...this.access.outputs.values()];
+    const ids = outs.map((o) => o.id);
+    // Keep the operator's manual pick if still present; otherwise auto-select the maze's
+    // UM-ONE interface when it's there, falling back to the first available output.
+    const umOne = outs.find((o) => /um[-\s]?one/i.test(o.name || ''));
+    this.selectedOutputId = ids.includes(prev) ? prev : (umOne?.id ?? ids[0] ?? null);
     if (this.selectedOutputId) this._outputSel.value = this.selectedOutputId;
     const n = this.access.outputs.size;
     this._setStatus(n ? `ready — ${n} output${n > 1 ? 's' : ''}` : 'no MIDI outputs found', n > 0);

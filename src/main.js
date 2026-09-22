@@ -2,7 +2,7 @@ import { loadLayout, loadDemos, loadLoops, loadMidiMapping } from './config/load
 import { MazeState } from './model/mazeState.js';
 import { MazeHud } from './ui/mazeHud.js';
 import { Grid } from './model/grid.js';
-import { PanelEngine } from './model/engine.js';
+import { MazeEngine } from './model/mazeEngine.js';
 import { SceneView } from './render/scene.js';
 import { PanelMeshes } from './render/panelMesh.js';
 import { GridMap } from './ui/gridMap.js';
@@ -118,7 +118,13 @@ function main() {
 
   try {
   const grid = new Grid(config);
-  const engine = new PanelEngine(config, panels);
+
+  // Transport + tracked belief must exist BEFORE the engine: the engine is state-backed —
+  // every movement drives belief -> MIDI -> mirror to 3D — so it needs both. (midiMap was
+  // loaded up top; it also drives the engine's panel set.)
+  const mazeMidi = new MazeMidiController();
+  const mazeState = new MazeState(midiMap.byNote);
+  const engine = new MazeEngine(config, panels, { state: mazeState, midi: mazeMidi });
 
   // Render
   const viewport = document.getElementById('viewport');
@@ -185,17 +191,14 @@ function main() {
   // Mount MIDI as a persistent sidebar section — not a movement.
   document.getElementById('midi-section').appendChild(midi.el);
 
-  // MIDI investigation: sends note messages OUT to the physical maze.
-  const mazeMidi = new MazeMidiController();
+  // MIDI investigation: sends note messages OUT to the physical maze (transport built above).
   document.getElementById('midi-investigation-section').appendChild(mazeMidi.el);
 
-  // Stateful physical-maze control: note map -> per-panel (z,v) tracker -> HUD.
-  // (midiMap was loaded up top — it also drives the engine's panel set.)
+  // Stateful physical-maze control: note map -> per-panel (z,v) tracker -> HUD (both built above).
   validateMidiMap(midiMap, engine);
-  const mazeState = new MazeState(midiMap.byNote);
   const mazeHud = new MazeHud(document.getElementById('maze-hud-section'), {
     engine, grid, view, state: mazeState, midi: mazeMidi,
-    viewport, cells,
+    viewport, cells, meshes,
   });
 
   new DemoBank(document.getElementById('demo-list'), demos, player, {
@@ -206,10 +209,9 @@ function main() {
     engine,
     collapseAll: true, // all groups start collapsed; user expands as needed
   });
-  // On load, settle into the "All up" transition (panels up, lights off) rather than
-  // auto-cycling demos. The cycle is still available via the "Cycle demos" button.
-  const startup = demos.find((d) => d.id === 'all-up');
-  if (startup) player.play(startup);
+  // On load we do NOT auto-play a movement: the sim now mirrors tracked belief (persisted or
+  // neutral), and playing "all up" would drive the real maze (state -> MIDI) on every reload.
+  // The demo cycle is still available via the "Cycle demos" button.
 
   // Global movement speed (cruise units/sec) — applies to every movement.
   const speed = document.getElementById('move-speed');
@@ -282,7 +284,7 @@ function main() {
     prison.tick(dt);       // drives caged panels directly; no-op unless its controls are open
     lullabyFloat.tick(dt); // brightness only — reads actual panel positions; no-op when inactive
     midi.tick(dt);         // re-asserts held brightness; mutes movement LEDs when mute is on
-    mazeHud.tick(dt);      // mirror tracked belief onto the sim (no-op unless mirror→3D is on)
+    mazeHud.tick(dt);      // mirror tracked belief onto the sim (always on: sim = physical belief)
     meshes.sync();
     gridMap.draw();
     cellBoard.draw();

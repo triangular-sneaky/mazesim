@@ -23,6 +23,14 @@
 export const N = 8;
 export const CYCLE = 2 * N; // 16 steps = one full bounce (up then back down)
 
+// Mirror mapping between tracked belief and the sim (kept here, in the pure model, so both
+// the HUD and the state-backed engine adapter share one definition):
+//   z 0..N  <-> sim position 0..255   (posToZ IS the "snap to nearest z" quantization)
+//   brightness 0..1 -> MIDI velocity 1..127 (0 below a small dead-zone = light off)
+export const zToPos = (z) => Math.round((z / N) * 255);
+export const posToZ = (pos) => Math.round((pos / 255) * N);
+export const brightToVel = (b01) => (b01 > 0.01 ? Math.max(1, Math.min(127, Math.round(b01 * 127))) : 0);
+
 /** Step-index on the circle for a logical state. */
 export const aOf = (z, v) => (v === 1 ? z : CYCLE - z) % CYCLE;
 
