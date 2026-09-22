@@ -1,5 +1,7 @@
 import { Panel } from './panel.js';
 
+const clamp01 = (b) => Math.max(0, Math.min(1, Number(b) || 0));
+
 /**
  * PanelEngine — owns all panels, advances them each tick, and exposes the single
  * ACTION API that every input source (manual UI, demos now; MIDI later) calls.
@@ -33,6 +35,17 @@ export class PanelEngine {
       const p = new Panel(d.x, d.y, d.orient, rest);
       this.panels.set(p.key, p);
     }
+
+    // Pending auto-off timers (panel key -> timer id), for move()'s `duration`.
+    this._offTimers  = new Map();
+    this._schedule   = (fn, ms) => setTimeout(fn, ms);
+    this._unschedule = (id) => clearTimeout(id);
+  }
+
+  /** Cancel a pending auto-off for a panel (a fresh move/off supersedes it). */
+  _clearOff(key) {
+    const id = this._offTimers.get(key);
+    if (id != null) { this._unschedule(id); this._offTimers.delete(key); }
   }
 
   key(x, y, orient) { return `${x},${y},${orient}`; }
@@ -78,10 +91,42 @@ export class PanelEngine {
     return true;
   }
 
-  /** Convenience: move every panel (used by demos). */
-  moveAll(targetPosition, opts = {}) {
+  /**
+   * Combined MOVE + LIGHT — the single primitive movements call. Move the panel toward
+   * `target` at the global cruise speed and set its light to `brightness` (0..1) for the
+   * move; a note-on on the real maze both steps and sets brightness, so the two are one
+   * call. If `duration` ms is given, the light auto-turns-off that long after this call
+   * (replacing the old blink sustain). Pass `brightness = null` to leave the light as-is.
+   * Light ENVELOPES are retired — a panel is simply on at a level or off.
+   * @param {number} target 0..255
+   * @param {number|null} [brightness] 0..1, or null to keep the current light
+   * @param {number|null} [duration] ms until an automatic light-off, or null for none
+   */
+  move(x, y, orient, target, brightness = null, duration = null) {
+    const p = this.get(x, y, orient);
+    if (!p) return false;
+    this._clearOff(p.key);
+    p.moveTo(target, this.speed, this.ease);
+    if (brightness != null) p.brightness = clamp01(brightness);
+    if (duration != null && duration > 0) {
+      this._offTimers.set(p.key, this._schedule(() => this.off(x, y, orient), duration));
+    }
+    return true;
+  }
+
+  /** Turn a panel's light off in place — the one light action that stands alone (no move). */
+  off(x, y, orient) {
+    const p = this.get(x, y, orient);
+    if (!p) return false;
+    this._clearOff(p.key);
+    p.brightness = 0;
+    return true;
+  }
+
+  /** Convenience: move every panel to one target with one light level (used by demos). */
+  moveAll(target, brightness = null, duration = null) {
     for (const p of this.panels.values()) {
-      this.movePanel(p.x, p.y, p.orient, targetPosition, opts);
+      this.move(p.x, p.y, p.orient, target, brightness, duration);
     }
   }
 
@@ -89,12 +134,15 @@ export class PanelEngine {
    * Synchronized "sweep": move a set of panels so they ALL ARRIVE at the same instant,
    * each traveling at the single global speed. Panels with less distance to cover start
    * later (a staggered delay) and "join in", so the group levels together — without any
-   * panel ever moving at a non-global speed (only the start times differ).
+   * panel ever moving at a non-global speed (only the start times differ). `brightness`
+   * and `duration` apply the combined-light rule to every swept panel (see move()).
    * @param {{x:number,y:number,orient:'h'|'v',target:number}[]} moves
-   * @param {{ease?:number}} [opts]
+   * @param {{brightness?:number|null, duration?:number|null, ease?:number}} [opts]
    */
   sweepTo(moves, opts = {}) {
     const ease = opts.ease ?? this.ease;
+    const brightness = opts.brightness ?? null;
+    const duration = opts.duration ?? null;
     const rate = this.speed * (1 - ease); // effective units/sec used for the duration
     const plan = [];
     let maxDur = 0;
@@ -108,13 +156,18 @@ export class PanelEngine {
     }
     // Delay each move so every panel finishes at maxDur (the longest single move).
     for (const { p, target, dur } of plan) {
+      this._clearOff(p.key);
       p.moveTo(target, this.speed, ease, maxDur - dur);
+      if (brightness != null) p.brightness = clamp01(brightness);
+      if (duration != null && duration > 0) {
+        this._offTimers.set(p.key, this._schedule(() => this.off(p.x, p.y, p.orient), duration));
+      }
     }
   }
 
   /** Sweep every panel to one target, all arriving together (see sweepTo). */
-  sweepAll(targetPosition, opts = {}) {
-    this.sweepTo(this.list().map((p) => ({ x: p.x, y: p.y, orient: p.orient, target: targetPosition })), opts);
+  sweepAll(target, opts = {}) {
+    this.sweepTo(this.list().map((p) => ({ x: p.x, y: p.y, orient: p.orient, target })), opts);
   }
 
   // ---- Clock -----------------------------------------------------------------

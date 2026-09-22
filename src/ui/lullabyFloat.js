@@ -6,8 +6,8 @@
  * target), the center naturally leads and others chase behind proportionally —
  * closer panels follow more tightly, far ones barely move.
  *
- * All movement goes through engine.movePanel / engine.sweepTo (global speed only).
- * Brightness is written directly to panel.brightness each tick, after engine.tick().
+ * All movement goes through the engine's combined move/sweepTo (global speed only), which
+ * carries the elastic brightness with the motion — light and move are one call.
  *
  * Direction reversal only triggers once the center panels report moving===false,
  * preventing the ease-in/ease-out from restarting mid-travel (jerk).
@@ -79,11 +79,7 @@ export class LullabyFloat {
       this._startDown();
     } else {
       this._going = null;
-      this.engine.moveAll(this.topPos);
-      const fadeOut = { attack: 0, sustain: 0, decay: 1.5, peak: 0 };
-      for (const { p } of this._panelData) {
-        this.engine.blinkPanel(p.x, p.y, p.orient, fadeOut);
-      }
+      this.engine.moveAll(this.topPos, 0); // rise to rest and go dark
     }
   }
 
@@ -97,14 +93,14 @@ export class LullabyFloat {
     if (!this._active) return;
     this._going    = 'down';
     this._dwelling = false;
-    this.engine.sweepTo(this._centerPanels.map((p) => ({ ...p, target: this.lo })));
+    this.engine.sweepTo(this._centerPanels.map((p) => ({ ...p, target: this.lo })), { brightness: this._fadeIn });
   }
 
   _startUp() {
     if (!this._active) return;
     this._going    = 'up';
     this._dwelling = false;
-    this.engine.sweepTo(this._centerPanels.map((p) => ({ ...p, target: this.hi })));
+    this.engine.sweepTo(this._centerPanels.map((p) => ({ ...p, target: this.hi })), { brightness: this._fadeIn });
   }
 
   // ---- Tick — arrival detection + elastic field + brightness ----------------
@@ -151,15 +147,14 @@ export class LullabyFloat {
     for (const { p, dist, isCenter } of this._panelData) {
       const falloff = Math.max(0, 1 - dist / this._maxDist);
 
-      if (isCenter) {
-        p.brightness = this._fadeIn;
-      } else if (this.elastic) {
-        // Chase center's current actual position — creates natural lead/lag cascade.
+      if (isCenter) continue; // center's light rides its own bounce sweeps (_startDown/_startUp)
+      if (this.elastic) {
+        // Chase center's current actual position — creates natural lead/lag cascade. The move
+        // carries the elastic brightness (light + motion in one call).
         const target = Math.round(topPos + (centerPos - topPos) * falloff * this.elasticity);
-        this.engine.movePanel(p.x, p.y, p.orient, target);
-        p.brightness = falloff * pull * this._fadeIn;
+        this.engine.move(p.x, p.y, p.orient, target, falloff * pull * this._fadeIn);
       } else {
-        p.brightness = 0;
+        this.engine.off(p.x, p.y, p.orient); // no elastic field: keep the surround dark
       }
     }
   }

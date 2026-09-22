@@ -127,7 +127,6 @@ function particlesPlan(engine, params) {
   const topPos          = params.topPos     ?? 255;
   const speed           = params.speed      ?? 300;
   const rippleSize      = params.rippleSize ?? 0.08;
-  const rippleFadeout   = params.rippleFadeout ?? 0.8;
   const oppose          = (params.oppose  ?? 0) > 0;
   const fadeIn          = (params.fadeIn  ?? 0) > 0;
 
@@ -177,12 +176,8 @@ function particlesPlan(engine, params) {
     if (!visited.has(key)) spiralOrder.push(p);
   }
 
-  const dark         = { attack: 0, sustain: 0, decay: 0, peak: 0 };
   const settleAction = { t: 0, run: () => {
-    for (const { p, pos } of structData) {
-      engine.movePanel(p.x, p.y, p.orient, pos);
-      engine.blinkPanel(p.x, p.y, p.orient, dark);
-    }
+    for (const { p, pos } of structData) engine.move(p.x, p.y, p.orient, pos, 0); // settle, dark
   }};
 
   const rate    = engine.speed * (1 - engine.ease);
@@ -211,15 +206,10 @@ function particlesPlan(engine, params) {
         const t0        = tBase + stagger + i * speed;
 
         const fadeMult = fadeIn ? Math.min(1, (stagger + i * speed) / Math.max(1, cycleDuration - speed)) : 1;
-        const glow = { attack: rMs / 1000, sustain: 0.05, decay: rippleFadeout, peak: fadeMult };
 
-        burst.push({ t: t0, run: () => {
-          engine.movePanel(p.x, p.y, p.orient, sPos + lift);
-          engine.blinkPanel(p.x, p.y, p.orient, glow);
-        }});
-        burst.push({ t: t0 + rMs, run: () => {
-          engine.movePanel(p.x, p.y, p.orient, sPos);
-        }});
+        // Particle passes: lift + light on, then drop back to the structure, dark.
+        burst.push({ t: t0, run: () => engine.move(p.x, p.y, p.orient, sPos + lift, fadeMult) });
+        burst.push({ t: t0 + rMs, run: () => engine.move(p.x, p.y, p.orient, sPos, 0) });
       }
     }
     return burst;
@@ -239,20 +229,15 @@ const TRIGGERABLE = {
 
 export const GENERATORS = {
   /**
-   * Move every panel to a single position at once. With `lightsOff: true`, also
-   * extinguish every LED — a zero-peak blink replaces any held-on envelope (e.g. the
-   * static pattern Chase leaves lit) and holds brightness at 0.
+   * Move every panel to a single position at once. With `lightsOff: true`, also extinguish
+   * every LED — the move carries brightness 0 (dark). Otherwise the light is left unchanged.
    */
   allTo(engine, params) {
     const position = params.position ?? 128;
     const lightsOff = params.lightsOff ?? false;
-    const off = { attack: 0, sustain: 0, decay: 0, peak: 0 };
     return [{
       t: 0,
-      run: () => {
-        engine.moveAll(position);
-        if (lightsOff) engine.list().forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, off));
-      },
+      run: () => engine.moveAll(position, lightsOff ? 0 : null),
     }];
   },
 
@@ -263,14 +248,12 @@ export const GENERATORS = {
     const up = params.up ?? 255;
     const down = params.down ?? 110;
 
-    const glow = { attack: 0.15, sustain: (interval * 2) / 1000, decay: 0.6 };
+    const LIT = 1;
     const lanes = [...new Set(engine.list().map((p) => p[axis]))].sort((a, b) => a - b);
     const actions = [];
-    const rise = (panels, upPos) => panels.forEach((p) => {
-      engine.movePanel(p.x, p.y, p.orient, upPos);
-      engine.blinkPanel(p.x, p.y, p.orient, glow);
-    });
-    const fall = (panels, downPos) => panels.forEach((p) => engine.movePanel(p.x, p.y, p.orient, downPos));
+    // Rise = move up + light on; fall = move down + go dark (the pulse passes over the lane).
+    const rise = (panels, upPos) => panels.forEach((p) => engine.move(p.x, p.y, p.orient, upPos, LIT));
+    const fall = (panels, downPos) => panels.forEach((p) => engine.move(p.x, p.y, p.orient, downPos, 0));
     lanes.forEach((lane, i) => {
       const inLane = engine.list().filter((p) => p[axis] === lane);
       const h = inLane.filter((p) => p.orient === 'h');
@@ -297,13 +280,11 @@ export const GENERATORS = {
     const dist = (p) => Math.round(Math.hypot(p.x - cx, p.y - cy));
     const rings = [...new Set(engine.list().map(dist))].sort((a, b) => a - b);
 
-    const glow = { attack: 0.15, sustain: (interval * 3) / 1000, decay: 0.6 };
+    const LIT = 1;
     const actions = [];
-    const rise = (panels, upPos) => panels.forEach((p) => {
-      engine.movePanel(p.x, p.y, p.orient, upPos);
-      engine.blinkPanel(p.x, p.y, p.orient, glow);
-    });
-    const fall = (panels, downPos) => panels.forEach((p) => engine.movePanel(p.x, p.y, p.orient, downPos));
+    // Rise = move up + light on; fall = move down + go dark (the ring pulse passes outward).
+    const rise = (panels, upPos) => panels.forEach((p) => engine.move(p.x, p.y, p.orient, upPos, LIT));
+    const fall = (panels, downPos) => panels.forEach((p) => engine.move(p.x, p.y, p.orient, downPos, 0));
     rings.forEach((r, i) => {
       const inRing = engine.list().filter((p) => dist(p) === r);
       const h = inRing.filter((p) => p.orient === 'h');
@@ -335,21 +316,26 @@ export const GENERATORS = {
     return engine.list().map((p) => {
       const t = Math.hypot(p.x - cx, p.y - cy) / maxD; // 0 center .. 1 edge
       const pos = Math.round(base + (peak - base) * (1 - t));
-      return { t: 0, run: () => engine.movePanel(p.x, p.y, p.orient, pos) };
+      return { t: 0, run: () => engine.move(p.x, p.y, p.orient, pos) }; // move to the cone height, keep light
     });
   },
 
-  /** Random LED blinks scattered over time. */
+  /**
+   * Random LED blinks scattered over time. A blink is a light pulse in place: move to the
+   * panel's current height (0 steps on the real maze — a light-in-place, 3D only for now) at
+   * full brightness, auto-off after `blinkMs`.
+   */
   sparkle(engine, params) {
     const count = params.count ?? 80;
     const interval = (params.interval ?? 110) * timeScale(engine);
+    const blinkMs = params.blinkMs ?? Math.max(120, interval * 1.5);
     const all = engine.list();
     const actions = [];
     for (let i = 0; i < count; i++) {
       const p = all[Math.floor(Math.random() * all.length)];
       // jitter each blink a little so they don't lockstep
       const t = i * interval + Math.random() * interval;
-      actions.push({ t, run: () => engine.blinkPanel(p.x, p.y, p.orient) });
+      actions.push({ t, run: () => engine.move(p.x, p.y, p.orient, p.position, 1, blinkMs) });
     }
     return actions;
   },
@@ -413,22 +399,12 @@ export const GENERATORS = {
     // Leftover window to stagger starts in, so the last (slowest) panel finishes at `duration`.
     const startWindow = Math.max(0, duration - maxTravel);
 
-    const slow = { attack: 0.8, sustain: 0.7, decay: 1.3, peak: 0.6 };  // gentle pulse in transit
-    const litHold = { attack: 0.6, sustain: 3600, decay: 0, peak: 0.9 }; // freeze ON
-    const darkHold = { attack: 0.4, sustain: 3600, decay: 0, peak: 0 };  // freeze OFF
-
     const actions = [];
-    for (const { p, target, lit, rank, travel } of plan) {
+    for (const { p, target, lit, rank } of plan) {
       const start = rank * startWindow;
-      const finish = start + travel;
-
-      actions.push({ t: start, run: () => engine.movePanel(p.x, p.y, p.orient, target) });
-      actions.push({ t: start, run: () => engine.blinkPanel(p.x, p.y, p.orient, slow) });
-      if (travel > 1600) {
-        actions.push({ t: start + travel * 0.5, run: () => engine.blinkPanel(p.x, p.y, p.orient, slow) });
-      }
-      // As this panel lands, settle its light to the static on/off pattern (and end any pulse).
-      actions.push({ t: finish, run: () => engine.blinkPanel(p.x, p.y, p.orient, lit ? litHold : darkHold) });
+      // One combined move per panel: travel to its target carrying its FINAL light — lit panels
+      // sweep in glowing, dark ones sweep in dark. The result is a static lit/dark pattern.
+      actions.push({ t: start, run: () => engine.move(p.x, p.y, p.orient, target, lit ? 0.9 : 0) });
     }
     return actions;
   },
@@ -505,9 +481,9 @@ export const GENERATORS = {
     const rate = engine.speed * (1 - engine.ease);
     const fullTravelMs = rate > 0 ? (Math.abs(upPos - downPos) / rate) * 1000 : 0;
 
-    // LED envelopes — configurable from YAML (activateBlink / deactivateBlink).
-    const litHold = { attack: 0.3, sustain: 3600, decay: 0,    peak: 1.0, ...(params.activateBlink   ?? {}) };
-    const dim      = { attack: 0,   sustain: 0,    decay: 0.05, peak: 1.0, ...(params.deactivateBlink ?? {}) };
+    // Light levels (envelopes retired): an activated slab is lit, a deactivated one goes dark.
+    const LIT = 1;   // activated / stolen: on
+    const DARK = 0;  // deactivated: off (rides the rise up)
 
     const n = groups.length;
     if (n === 0) return [];
@@ -547,10 +523,8 @@ export const GENERATORS = {
     // so they meet at the mid height exactly half a range-travel after the deactivation begins.
     const stealAfter = fullTravelMs / 2;
 
-    const sweep = (panels, target, env) => () => {
-      engine.sweepTo(panels.map((p) => ({ ...p, target })));
-      panels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, env));
-    };
+    const sweep = (panels, target, bright) => () =>
+      engine.sweepTo(panels.map((p) => ({ ...p, target })), { brightness: bright });
 
     const actions = [];
     for (let s = 0; s < N; s++) {
@@ -565,17 +539,17 @@ export const GENERATORS = {
       const activateSet = panels.filter((p) => !inherited.has(key(p)));
 
       // Activate: sweep our (non-inherited) panels down to the mid-room height, lit.
-      actions.push({ t: actStart[s], run: sweep(activateSet, downPos, litHold) });
+      actions.push({ t: actStart[s], run: sweep(activateSet, downPos, LIT) });
 
-      // Deactivate: sweep ALL our panels up, dimming as they rise. Any wall we share with
+      // Deactivate: sweep ALL our panels up, going dark as they rise. Any wall we share with
       // the NEXT block will be overridden mid-rise by that block's steal (below).
-      actions.push({ t: deactStart(s), run: sweep(panels, upPos, dim) });
+      actions.push({ t: deactStart(s), run: sweep(panels, upPos, DARK) });
 
       // Steal: half a range-travel into our deactivation, the next block meets our shared
       // wall at the mid height and pulls it back down (re-lit), landing with its slab.
       const handoff = sharedBetween(cur, next);
       if (handoff.length) {
-        actions.push({ t: deactStart(s) + stealAfter, run: sweep(handoff, downPos, litHold) });
+        actions.push({ t: deactStart(s) + stealAfter, run: sweep(handoff, downPos, LIT) });
       }
     }
     return actions;
@@ -621,29 +595,11 @@ export const GENERATORS = {
     const fallingMs = rate > 0 ? ((dropHeight - dropLo)   / rate) * 1000 : 0;
     const rippleLift = Math.round((dropHeight - dropLo) * (params.rippleHeight ?? 0.05));
     const riseMs       = rate > 0 ? (rippleLift / rate) * 1000 : 0;
-    // Fadeout: how long the ripple glow decays after peaking; defaults to formula, user-tunable.
-    const rippleFadeout = params.rippleFadeout ?? riseMs / 1000 * 1.5;
-
-    const darkAll = { attack: 0, sustain: 0, decay: 0, peak: 0 };
-    const snapOff = { attack: 0, sustain: 0, decay: 0.05, peak: 1.0 };
-    const glowOn  = { attack: 0.3, sustain: 3600, decay: 0, peak: 1.0 };
-    const rippleGlow = {
-      attack:  riseMs / 1000,
-      sustain: 0.1,
-      decay:   rippleFadeout,
-      peak:    1.0,
-    };
 
     const actions = [];
 
     // Phase 0 — settle everything to the floor, lights off.
-    actions.push({
-      t: 0,
-      run: () => {
-        engine.sweepAll(floorPos);
-        allPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, darkAll));
-      },
-    });
+    actions.push({ t: 0, run: () => engine.sweepAll(floorPos, { brightness: 0 }) });
 
     // One bounce + ripple per play (loop: true in params drives continuous repeat).
     const t0    = settleMs;
@@ -651,21 +607,15 @@ export const GENERATORS = {
     const ccx = centerX + 0.5, ccy = centerY + 0.5;
 
     // Center rises (dark).
-    actions.push({ t: t0, run: () => {
-      engine.sweepTo(centerPanels.map((p) => ({ ...p, target: dropHeight })));
-      centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, snapOff));
-    } });
+    actions.push({ t: t0, run: () =>
+      engine.sweepTo(centerPanels.map((p) => ({ ...p, target: dropHeight })), { brightness: 0 }) });
 
     // Center descends (lit).
-    actions.push({ t: t0 + risingMs, run: () => {
-      engine.sweepTo(centerPanels.map((p) => ({ ...p, target: dropLo })));
-      centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, glowOn));
-    } });
+    actions.push({ t: t0 + risingMs, run: () =>
+      engine.sweepTo(centerPanels.map((p) => ({ ...p, target: dropLo })), { brightness: 1 }) });
 
-    // Floor touch: center snaps off; ripple radiates outward.
-    actions.push({ t: tDrop, run: () => {
-      centerPanels.forEach((p) => engine.blinkPanel(p.x, p.y, p.orient, snapOff));
-    } });
+    // Floor touch: center light off (stays at dropLo).
+    actions.push({ t: tDrop, run: () => centerPanels.forEach((p) => engine.off(p.x, p.y, p.orient)) });
 
     // Ripple-start cap: the first ring must fire within rippleStartCap ms of the drop.
     // Compute the closest panel distance, then shift all times so that first ring ≤ cap.
@@ -684,14 +634,9 @@ export const GENERATORS = {
       const wt   = tDrop + dist * rippleInterval + rippleShift;
       const rippleTop = floorPos + rippleLift;
 
-      actions.push({ t: wt, run: () => {
-        engine.movePanel(p.x, p.y, p.orient, rippleTop);
-        engine.blinkPanel(p.x, p.y, p.orient, rippleGlow);
-      } });
-
-      actions.push({ t: wt + riseMs, run: () => {
-        engine.movePanel(p.x, p.y, p.orient, floorPos);
-      } });
+      // Ripple pass: lift + light on, then drop back to the floor, dark.
+      actions.push({ t: wt, run: () => engine.move(p.x, p.y, p.orient, rippleTop, 1) });
+      actions.push({ t: wt + riseMs, run: () => engine.move(p.x, p.y, p.orient, floorPos, 0) });
     }
 
     return actions;
@@ -844,19 +789,14 @@ export const GENERATORS = {
       }
     };
 
-    const litBlink  = { attack: 0.2, sustain: 9999, decay: 1.0, peak: 0.9 };
-    const darkBlink = { attack: 0,   sustain: 0,    decay: 0,   peak: 0   };
-
     const actions = [];
     for (const p of panels) {
       const result = assign(p);
       const pos    = result ? result.pos : restPos;
-      const blink  = result ? litBlink : darkBlink;
+      const bright = result ? 0.9 : 0;          // participating box edges lit; the rest dark
       const t      = result ? Math.round(delayOf(p)) : 0;
-      actions.push({ t, run: () => {
-        engine.movePanel(p.x, p.y, p.orient, pos);
-        engine.blinkPanel(p.x, p.y, p.orient, blink);
-      }});
+      // One combined move: edge panels sweep into the box outline lit, the field stays dark.
+      actions.push({ t, run: () => engine.move(p.x, p.y, p.orient, pos, bright) });
     }
     return actions;
   },
@@ -961,10 +901,6 @@ export const GENERATORS = {
     if (exits.length > 0) passages.add(exits[Math.floor(Math.random() * exits.length)]);
 
     // ---- Build timed actions (same timing model as chase) -------------------
-    const slow     = { attack: 0.8, sustain: 0.7, decay: 1.3, peak: 0.6 };
-    const litHold  = { attack: 0.6, sustain: 3600, decay: 0, peak: 0.9 };
-    const darkHold = { attack: 0.4, sustain: 3600, decay: 0, peak: 0   };
-
     const plan = panels.map((p) => {
       const passage = passages.has(`${p.x},${p.y},${p.orient}`);
       const target  = passage ? topA : topB;
@@ -979,19 +915,10 @@ export const GENERATORS = {
     const startWindow = Math.max(0, duration - maxTravel);
 
     const actions = [];
-    for (const { p, target, passage, rank, travel } of plan) {
-      const t0     = rank * startWindow;
-      const finish = t0 + travel;
-
-      actions.push({ t: t0,     run: () => engine.movePanel(p.x, p.y, p.orient, target) });
-      actions.push({ t: t0,     run: () => engine.blinkPanel(p.x, p.y, p.orient, slow)  });
-      if (travel > 1600) {
-        actions.push({ t: t0 + travel * 0.5, run: () => engine.blinkPanel(p.x, p.y, p.orient, slow) });
-      }
-      actions.push({
-        t: finish,
-        run: () => engine.blinkPanel(p.x, p.y, p.orient, passage ? litHold : darkHold),
-      });
+    for (const { p, target, passage, rank } of plan) {
+      const t0 = rank * startWindow;
+      // One combined move per panel: passages sweep up high + lit, walls sweep low + dark.
+      actions.push({ t: t0, run: () => engine.move(p.x, p.y, p.orient, target, passage ? 0.9 : 0) });
     }
     return actions;
   },
@@ -1009,21 +936,22 @@ export const GENERATORS = {
     const pick = () => all[Math.floor(Math.random() * all.length)];
     const height = () => minPos + Math.round(Math.random() * (maxPos - minPos));
 
-    // Moves: each panel darts to a random height. All motion uses the global
-    // cruise speed; times are spread across the duration with a little jitter so
+    // Moves: each panel darts to a random height (light unchanged). All motion uses the
+    // global cruise speed; times are spread across the duration with a little jitter so
     // panels don't move in lockstep.
     for (let i = 0; i < moves; i++) {
       const p = pick();
       const target = height();
       const t = (i / moves) * duration + Math.random() * (duration / moves);
-      actions.push({ t, run: () => engine.movePanel(p.x, p.y, p.orient, target) });
+      actions.push({ t, run: () => engine.move(p.x, p.y, p.orient, target) });
     }
 
-    // Blinks: random sparks scattered independently across the same window.
+    // Blinks: random sparks (light in place at the panel's current height, auto-off).
+    const blinkMs = params.blinkMs ?? 200;
     for (let i = 0; i < blinks; i++) {
       const p = pick();
       const t = Math.random() * duration;
-      actions.push({ t, run: () => engine.blinkPanel(p.x, p.y, p.orient) });
+      actions.push({ t, run: () => engine.move(p.x, p.y, p.orient, p.position, 1, blinkMs) });
     }
 
     return actions;

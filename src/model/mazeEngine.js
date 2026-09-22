@@ -42,35 +42,53 @@ export class MazeEngine extends PanelEngine {
   // ---- Intent-bearing action API (routed through belief + MIDI) --------------
 
   /**
-   * Move a panel toward a target height. Snaps the raw sim target to the nearest tracked z,
-   * plans the minimal note-ons from current belief to reach it, emits them (if output is on),
-   * and commits the resulting belief. Does NOT glide the Panel — the HUD tick renders belief.
-   * `opts` (e.g. an explicit scrub velocity) is ignored: rendering is belief-driven at the
-   * single global speed. Dead panels and no-op moves send nothing.
+   * Combined MOVE + LIGHT — the single primitive movements call. Snap the raw target to the
+   * nearest tracked z, plan the minimal note-ons from current belief, and — if output is on —
+   * emit them at velocity = `brightness` (on the real maze a note-on both steps AND sets the
+   * light, so move and light are one call). Commit the resulting belief. Does NOT glide the
+   * Panel — the HUD tick renders belief. `brightness` is 0..1 (null keeps the current light);
+   * `duration` ms schedules an automatic off(). Dead panels and no-op moves send nothing;
+   * a light change with no step (steps === 0) updates belief only — the deferred light-in-place.
    */
-  movePanel(x, y, orient, targetPosition, _opts = {}) {
+  move(x, y, orient, target, brightness = null, duration = null) {
     const note = this.noteAt(x, y, orient);
     if (note == null) return false;
     const p = this.state.get(note);
     if (!p || p.dead) return false;
+    const key = `${x},${y},${orient}`;
+    this._clearOff(key);
 
-    const zT = posToZ(Math.max(0, Math.min(255, targetPosition)));
+    const zT = posToZ(Math.max(0, Math.min(255, target)));
+    const onVel = brightness == null ? p.brightness : brightToVel(brightness); // 0..127; null = keep
     const { steps, newState } = planMove(p.z, p.v, zT);
     if (steps > 0 && this.midi?.enabled) {
-      const vel = Math.max(1, p.brightness || 1); // light rides the move; min 1 so a move is visible
-      this.midi.sendSteps(new Map([[note, { steps, vel }]]));
+      this.midi.sendSteps(new Map([[note, { steps, vel: Math.max(1, onVel) }]]));
     }
-    this.state.commit(note, newState, p.brightness);
+    this.state.commit(note, newState, onVel);
+    if (duration != null && duration > 0) {
+      this._offTimers.set(key, this._schedule(() => this.off(x, y, orient), duration));
+    }
     return true;
   }
 
-  /**
-   * Trigger a panel's LED. Translates the blink envelope's peak to a tracked velocity so the
-   * belief (and thus the 3D glow) reflects it. Emits NO MIDI on its own: on the real maze light
-   * is coupled to motion (a note-on), so the light rides the next movement. A blink on a
-   * STATIONARY panel (e.g. sparkle) therefore only affects the 3D readout for now — the
-   * deferred "light + 1-step move" mode will close that gap.
-   */
+  /** Light off in place — the one standalone light action: a bare note-off (no move) + belief dark. */
+  off(x, y, orient) {
+    const note = this.noteAt(x, y, orient);
+    if (note == null) return false;
+    this._clearOff(`${x},${y},${orient}`);
+    const p = this.state.get(note);
+    if (!p) return false;
+    if (!p.dead && p.brightness > 0 && this.midi?.enabled) this.midi.sendOff([note]);
+    this.state.setBrightness(note, 0);
+    return true;
+  }
+
+  /** Manual per-panel move (controls / cell board): a move that keeps the current light. */
+  movePanel(x, y, orient, targetPosition, _opts = {}) {
+    return this.move(x, y, orient, targetPosition, null);
+  }
+
+  /** Manual light preview (controls / cell board): set believed brightness (3D only, no MIDI). */
   blinkPanel(x, y, orient, opts = {}) {
     const note = this.noteAt(x, y, orient);
     if (note == null) return false;
@@ -81,13 +99,15 @@ export class MazeEngine extends PanelEngine {
     return true;
   }
 
-  /** Synchronized sweep collapses to per-panel planned moves (arrival stagger is moot under
-   *  z-quantization + one global glide speed). Routes each move through movePanel above. */
-  sweepTo(moves, _opts = {}) {
-    for (const m of moves) this.movePanel(m.x, m.y, m.orient, m.target);
+  /** Synchronized sweep collapses to per-panel combined moves (stagger is moot under
+   *  z-quantization + one global glide speed). */
+  sweepTo(moves, opts = {}) {
+    const brightness = opts.brightness ?? null;
+    const duration = opts.duration ?? null;
+    for (const m of moves) this.move(m.x, m.y, m.orient, m.target, brightness, duration);
   }
 
-  // `moveAll` / `sweepAll` inherit from PanelEngine — they call this.movePanel / this.sweepTo.
+  // `moveAll` / `sweepAll` inherit from PanelEngine — they call this.move / this.sweepTo.
 
   // ---- Render primitive (belief -> sim, no state/MIDI) -----------------------
 

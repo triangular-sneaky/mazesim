@@ -10,8 +10,9 @@
  *   .setActive(on)   — start/stop the interactive mode (idempotent)
  *   .tick(dt)        — advance per frame (call from the main animation loop)
  *
- * All panel motion — the drop, the bob, the release — goes through engine.movePanel at
- * the GLOBAL speed (no velocity override): the bob ping-pongs between ground and ~1 m,
+ * All panel motion — the drop, the bob, the release — goes through the engine's combined
+ * sweep at the GLOBAL speed (no velocity override), carrying the cage light with the move;
+ * the bob ping-pongs between ground and ~1 m,
  * flipping target each time the panels arrive, so its amplitude is fixed while its period
  * follows the global speed. Only LED brightness (the glow) is driven directly here.
  */
@@ -109,8 +110,8 @@ export class PrisonMode {
     for (const p of this.trapPanels) this.releasing.delete(p.key); // re-caged shared edges
     this.bobTarget = this.groundPos; // drop in first; the bob flips this on arrival
     this._dwell = 0;
-    // Sweep the four edges down together — they arrive as one even from different heights.
-    this.engine.sweepTo(this._moves(this.bobTarget));
+    // Sweep the four edges down together (lit) — they arrive as one even from different heights.
+    this.engine.sweepTo(this._moves(this.bobTarget), { brightness: this.peak });
     this.glowPhase = 0;
   }
 
@@ -118,7 +119,7 @@ export class PrisonMode {
   _release() {
     if (this.trapPanels.length) {
       for (const p of this.trapPanels) this.releasing.set(p.key, { panel: p, b: p.brightness });
-      this.engine.sweepTo(this._moves(this.releasePos));
+      this.engine.sweepTo(this._moves(this.releasePos), { brightness: 0 }); // rise + go dark
     }
     this.trapCell = null;
     this.trapPanels = [];
@@ -150,7 +151,7 @@ export class PrisonMode {
         this._dwell += dt;
         if (this._dwell >= this.bobDwell) {
           this.bobTarget = this.bobTarget === this.groundPos ? this.highPos : this.groundPos;
-          this.engine.sweepTo(this._moves(this.bobTarget));
+          this.engine.sweepTo(this._moves(this.bobTarget), { brightness: this.peak });
           this._dwell = 0;
         }
       }
