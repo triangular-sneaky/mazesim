@@ -123,7 +123,21 @@ export class MazeHud {
     viewsNote.className = 'hint';
     viewsNote.style.margin = '0';
     viewsNote.textContent = '2D + virtual — both live, 3D mirrors belief';
-    head.append(viewsNote);
+
+    // Logging mode: record every MIDI message sent so a selected panel's messages can be
+    // inspected (collapsed list in the card below).
+    const logLabel = document.createElement('label');
+    logLabel.className = 'toggle';
+    logLabel.style.marginLeft = 'auto';
+    this._logCheck = document.createElement('input');
+    this._logCheck.type = 'checkbox';
+    this._logCheck.checked = this.midi.logging;
+    this._logCheck.addEventListener('change', () => {
+      this.midi.logging = this._logCheck.checked;
+      this._refreshCard();
+    });
+    logLabel.append(this._logCheck, document.createTextNode(' log MIDI'));
+    head.append(viewsNote, logLabel);
 
     // Global actions.
     const g1 = document.createElement('div');
@@ -132,10 +146,10 @@ export class MazeHud {
     stepAllBtn.title = 'Send one step to every panel so you can verify each one moves as tracked';
     const zeroBtn = mkBtn('Fix to 0', () => this.resetAtZero());
     zeroBtn.classList.add('danger');
-    zeroBtn.title = 'Assume every panel is home: fix tracked belief to 0+ (no MIDI, no movement)';
+    zeroBtn.title = 'Assume every panel is home and dark: fix tracked belief to 0+, lights off (no MIDI, no movement)';
     const topBtn = mkBtn('Fix to 8-', () => this.resetAtTop());
     topBtn.classList.add('danger');
-    topBtn.title = 'Assume every panel is at the top: fix tracked belief to 8- (no MIDI, no movement)';
+    topBtn.title = 'Assume every panel is at the top and dark: fix tracked belief to 8-, lights off (no MIDI, no movement)';
     const panicBtn = mkBtn('panic', () => { if (this.midi.enabled) this.midi.panic(); });
     panicBtn.title = 'All lights off (no movement)';
     g1.append(stepAllBtn, zeroBtn, topBtn, panicBtn);
@@ -319,6 +333,40 @@ export class MazeHud {
         this._afterChange();
       }),
     );
+
+    if (this.midi.logging) card.append(this._logEl(p.note));
+  }
+
+  /**
+   * A collapsed <details> list of the MIDI messages sent to one note (most-recent first).
+   * Snapshotted when the card is (re)built — reselect the panel to refresh.
+   */
+  _logEl(note) {
+    const entries = this.midi.logFor(note);
+    const details = document.createElement('details');
+    details.className = 'hud-log';
+    const summary = document.createElement('summary');
+    summary.textContent = `MIDI log (${entries.length})`;
+    details.append(summary);
+
+    const list = document.createElement('div');
+    list.className = 'hud-log-list';
+    if (!entries.length) {
+      list.textContent = 'no messages sent yet';
+    } else {
+      const fmt = (t) => new Date(t).toLocaleTimeString([], { hour12: false }) +
+        '.' + String(t % 1000).padStart(3, '0');
+      // Most-recent first, capped so the DOM stays light.
+      for (const e of entries.slice(-120).reverse()) {
+        const row = document.createElement('div');
+        row.className = 'hud-log-row';
+        row.textContent = `${fmt(e.t)}  ${e.on ? `on v${e.vel}` : 'off'}`;
+        if (!e.on) row.style.opacity = '0.6';
+        list.append(row);
+      }
+    }
+    details.append(list);
+    return details;
   }
 
   // ---- per-panel actions -----------------------------------------------------
@@ -390,13 +438,13 @@ export class MazeHud {
   }
 
   /**
-   * Assume every panel is home at 0+ (z=0, v=+1): fix tracked belief only, NO midi — a
-   * bulk "Fix". Nothing physically moves; the 3D mirror glides home fast (belief reset).
+   * Assume every panel is home at 0+ (z=0, v=+1) with its light OFF: fix tracked belief only,
+   * NO midi — a bulk "Fix". Nothing physically moves; the 3D mirror glides home fast + dark.
    */
   resetAtZero() {
     for (const p of this.state.list()) {
       if (p.dead) continue;
-      this.state.commit(p.note, { z: 0, v: 1 }, p.brightness);
+      this.state.commit(p.note, { z: 0, v: 1 }, 0);
       this._fastReset.add(p.note);
     }
     this._lastMirroredPos.clear();
@@ -404,14 +452,14 @@ export class MazeHud {
   }
 
   /**
-   * Assume every panel is at the top at 8- (z=N, v=-1): fix tracked belief only, NO midi — a
-   * bulk "Fix" (the natural post-arrival state at the top, ready to descend). Nothing
-   * physically moves; the 3D mirror glides up fast (belief reset).
+   * Assume every panel is at the top at 8- (z=N, v=-1) with its light OFF: fix tracked belief
+   * only, NO midi — a bulk "Fix" (the natural post-arrival state at the top, ready to descend).
+   * Nothing physically moves; the 3D mirror glides up fast + dark.
    */
   resetAtTop() {
     for (const p of this.state.list()) {
       if (p.dead) continue;
-      this.state.commit(p.note, { z: N, v: -1 }, p.brightness);
+      this.state.commit(p.note, { z: N, v: -1 }, 0);
       this._fastReset.add(p.note);
     }
     this._lastMirroredPos.clear();

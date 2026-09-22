@@ -49,12 +49,16 @@ export class MazeEngine extends PanelEngine {
    * HUD tick renders belief. `brightness` is 0..1 (null keeps the current light); `duration` ms
    * schedules an automatic off().
    *
-   * The engine NEVER generates a 0-step move: a move is a physical action, always ≥1 note-on.
-   * When the target equals the current height, planMove would be 0 steps, so we substitute an
-   * in-place STAY — walk to the near wall and back (non-zero; a full 16-step loop at an
-   * endpoint). That keeps the light strike on the wire and belief consistent with the maze
-   * (light can only ride a note-on, so "light in place" costs a real stay). Dead panels only
-   * are skipped.
+   * A move never generates a POINTLESS operation, but any real change costs a step. Cases:
+   *  - height changes  → send those note-ons (min vel 1 so an off panel can still travel); the
+   *                      light rides along at `brightness`.
+   *  - same height, light must turn ON or change level → strike it with an in-place STAY (walk
+   *                      to the near wall and back; non-zero, a full 16-step loop at an endpoint,
+   *                      because light can only ride a note-on).
+   *  - same height, light must turn OFF (currently lit) → a bare note-off, no movement.
+   *  - same height, no light change — keeping brightness, or already off and staying off → a
+   *                      GENUINE no-op: send nothing, don't reinforce "off" with a velocity-1 step.
+   * Dead panels are skipped.
    */
   move(x, y, orient, target, brightness = null, duration = null) {
     const note = this.noteAt(x, y, orient);
@@ -65,13 +69,29 @@ export class MazeEngine extends PanelEngine {
     this._clearOff(key);
 
     const zT = posToZ(Math.max(0, Math.min(255, target)));
-    const onVel = brightness == null ? p.brightness : brightToVel(brightness); // 0..127; null = keep
-    let { steps, newState } = planMove(p.z, p.v, zT);
-    if (steps === 0) ({ steps, newState } = planStay(p.z, p.v)); // never a 0-step move: stay in place
-    if (this.midi?.enabled) {
-      this.midi.sendSteps(new Map([[note, { steps, vel: Math.max(1, onVel) }]]));
+    const keepLight = brightness == null;
+    const onVel = keepLight ? p.brightness : brightToVel(brightness); // 0..127
+    const { steps, newState } = planMove(p.z, p.v, zT);
+
+    if (steps > 0) {
+      // Real move — the note-ons carry the light (min vel 1 so an off panel can still travel).
+      if (this.midi?.enabled) this.midi.sendSteps(new Map([[note, { steps, vel: Math.max(1, onVel) }]]));
+      this.state.commit(note, newState, onVel);
+    } else if (!keepLight && onVel !== p.brightness) {
+      // Same height, but the light must change.
+      if (onVel > 0) {
+        // Turn on / change level in place — strike via a real stay (never 0 steps).
+        const stay = planStay(p.z, p.v);
+        if (this.midi?.enabled) this.midi.sendSteps(new Map([[note, { steps: stay.steps, vel: onVel }]]));
+        this.state.commit(note, stay.newState, onVel);
+      } else {
+        // Turn off in place — a bare note-off, no movement.
+        if (this.midi?.enabled) this.midi.sendOff([note]);
+        this.state.setBrightness(note, 0);
+      }
     }
-    this.state.commit(note, newState, onVel);
+    // else: genuine no-op (same height, keeping light or already off) — send nothing.
+
     if (duration != null && duration > 0) {
       this._offTimers.set(key, this._schedule(() => this.off(x, y, orient), duration));
     }

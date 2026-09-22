@@ -62,6 +62,12 @@ export class MazeMidiController {
     this._lastRefill = null;   // last token refill timestamp (set on first pump)
     this._out        = null;   // output resolved at enqueue time
 
+    // Logging mode: when on, every message actually put on the wire is recorded per-note so
+    // the HUD can show a panel's recent MIDI. Bounded per note to avoid unbounded growth.
+    this.logging = false;
+    this.log = new Map();      // note -> [{ t, on, vel }] (most-recent last)
+    this._logCap = 400;        // messages kept per note
+
     // Hard guard: notes here are never sent (belt-and-suspenders with the HUD's own
     // dead filter). The HUD keeps this in sync with tracked `dead` panels.
     this.deadNotes = new Set();
@@ -236,12 +242,29 @@ export class MazeMidiController {
 
     this._queue.shift();
     let when = now + 1;                            // tiny lead so all sends are scheduled
-    for (const m of unit) { out.send(m, when); when += step; }
+    for (const m of unit) { this._emit(out, m, when); when += step; }
     this._tokens -= cost;
 
     const unitDur = Math.max(1, cost * step);      // wall time this unit occupies the wire
     this._pumpTimer = this._schedule(() => this._pump(), unitDur);
   }
+
+  /** Put one message on the wire, recording it per-note when logging is on. */
+  _emit(out, msg, when) {
+    out.send(msg, when);
+    if (!this.logging) return;
+    const [status, note, vel] = msg;
+    let arr = this.log.get(note);
+    if (!arr) { arr = []; this.log.set(note, arr); }
+    arr.push({ t: Date.now(), on: (status & 0xf0) === 0x90 && vel > 0, vel });
+    if (arr.length > this._logCap) arr.splice(0, arr.length - this._logCap);
+  }
+
+  /** Recorded messages for a note (most-recent last), or an empty array. */
+  logFor(note) { return this.log.get(note) || []; }
+
+  /** Clear the whole MIDI log. */
+  clearLog() { this.log.clear(); }
 
   /** Flush the paced queue: drop all pending units and stop the pump. Used by panic() (and
    *  any explicit "stop everything" path); already-dispatched messages can't be unsent. */
@@ -259,7 +282,7 @@ export class MazeMidiController {
     if (!out) { this._setStatus('no MIDI output selected', false); return false; }
     const step = Math.max(0, this.delayMs);
     let when = this._now() + 1;
-    for (let n = 0; n <= 127; n++) { out.send([0x80, n, 0], when); when += step; }
+    for (let n = 0; n <= 127; n++) { this._emit(out, [0x80, n, 0], when); when += step; }
     this._setStatus('panic — all notes 0–127 off', true);
     if (this._activityEl) this._activityEl.textContent = 'panic (128 note-offs)';
     return true;

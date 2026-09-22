@@ -8,14 +8,20 @@ const CONFIG = {
   blink: { peak: 0.7, attack: 0.08, sustain: 0.15, decay: 0.4 },
 };
 
-// One panel at (0,0,h) = note 60. A fake transport that records every sendSteps plan.
+// One panel at (0,0,h) = note 60. A fake transport that records sendSteps plans and sendOffs.
 function makeEngine() {
   const byNote = new Map([[60, { x: 0, y: 0, orient: 'h', name: 'C4', deadInit: false }]]);
   const state = new MazeState(byNote, null);
   const sent = [];
-  const midi = { enabled: true, deadNotes: new Set(), sendSteps: (plan) => sent.push(plan) };
+  const offs = [];
+  const midi = {
+    enabled: true,
+    deadNotes: new Set(),
+    sendSteps: (plan) => sent.push(plan),
+    sendOff: (notes) => offs.push([...notes]),
+  };
   const engine = new MazeEngine(CONFIG, [{ x: 0, y: 0, orient: 'h' }], { state, midi });
-  return { engine, state, sent };
+  return { engine, state, sent, offs };
 }
 
 const stepsFor = (plan, note) => plan.get(note)?.steps;
@@ -28,33 +34,54 @@ test('a move to a NEW height plans the minimal steps (planMove)', () => {
   assert.equal(state.get(60).z, 3);
 });
 
-test('a move to the SAME height is never 0 steps — it stays in place (16 at an endpoint)', () => {
-  const { engine, state, sent } = makeEngine();          // fresh belief: z=0 (an endpoint)
-  engine.move(0, 0, 'h', 0, 1);                          // target z=0 == current z=0
+test('lighting a panel in place strikes via a stay — 16 at an endpoint, never 0 steps', () => {
+  const { engine, state, sent } = makeEngine();          // fresh belief: z=0 (endpoint), off
+  engine.move(0, 0, 'h', 0, 1);                          // same height, turn light ON
   assert.equal(sent.length, 1, 'still sends');
   assert.equal(stepsFor(sent[0], 60), 16, 'endpoint stay = full 16-step loop');
+  assert.equal(sent[0].get(60).vel, 127, 'the light rides the stay');
   assert.equal(state.get(60).z, 0, 'ends back at the same height');
 });
 
-test('a mid-height in-place move stays via the near wall (non-zero, < 16)', () => {
+test('a mid-height in-place light strike stays via the near wall (non-zero, < 16)', () => {
   const { engine, state, sent } = makeEngine();
-  state.commit(60, { z: 4, v: 1 }, 0);                   // put belief mid-range
-  engine.move(0, 0, 'h', 128, 1);                        // posToZ(128)=4 == current z=4
+  state.commit(60, { z: 4, v: 1 }, 0);                   // mid-range, off
+  engine.move(0, 0, 'h', 128, 1);                        // posToZ(128)=4 == current z, turn on
   const s = stepsFor(sent[0], 60);
   assert.ok(s > 0 && s < 16, `mid stay is non-zero and less than a full loop (got ${s})`);
   assert.equal(state.get(60).z, 4, 'still at the same height');
 });
 
-test('the light rides the stay: velocity is carried even with no net move', () => {
-  const { engine, sent } = makeEngine();
-  engine.move(0, 0, 'h', 0, 1);                          // full brightness, in place
-  assert.equal(sent[0].get(60).vel, 127);
+test('an OFF panel asked to stay put and stay off is a genuine no-op — nothing sent', () => {
+  const { engine, sent, offs } = makeEngine();           // z=0, brightness 0
+  engine.move(0, 0, 'h', 0, 0);                          // same height, still off
+  assert.equal(sent.length, 0, 'no velocity-1 reinforcement');
+  assert.equal(offs.length, 0);
+});
+
+test('keeping brightness with no height change is a genuine no-op', () => {
+  const { engine, state, sent, offs } = makeEngine();
+  state.commit(60, { z: 3, v: 1 }, 100);                 // lit, mid-range
+  engine.move(0, 0, 'h', 96);                            // posToZ(96)=3 == current, brightness omitted (keep)
+  assert.equal(sent.length, 0, 'nothing to do — no restrike');
+  assert.equal(offs.length, 0);
+  assert.equal(state.get(60).brightness, 100, 'light unchanged');
+});
+
+test('turning a lit panel off in place is a bare note-off (no movement)', () => {
+  const { engine, state, sent, offs } = makeEngine();
+  state.commit(60, { z: 3, v: 1 }, 100);                 // lit
+  engine.move(0, 0, 'h', 96, 0);                         // same height, turn OFF
+  assert.equal(sent.length, 0, 'no steps — off does not move');
+  assert.deepEqual(offs, [[60]]);
+  assert.equal(state.get(60).brightness, 0);
 });
 
 test('dead panels are skipped entirely (no stay, no send)', () => {
-  const { engine, state, sent } = makeEngine();
+  const { engine, state, sent, offs } = makeEngine();
   state.setDead(60, true);
   const ok = engine.move(0, 0, 'h', 0, 1);
   assert.equal(ok, false);
   assert.equal(sent.length, 0);
+  assert.equal(offs.length, 0);
 });

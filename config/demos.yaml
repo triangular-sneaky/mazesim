@@ -163,10 +163,11 @@ demos:
 
   - id: geo-diagonal
     name: Diagonal
-    desc: N wall up; W and E walls drape diagonally down north→south; the whole SE staircase cut sits on the floor — all lit, everything else off
+    desc: N wall up; W and E walls drape diagonally down north→south; the outer stepped edge of the SE staircase sits on the floor — all lit, everything else off
     group: Flowie
     generator: geo
-    params: { shape: diagonal, restPos: 255 }
+    # exclude notes 70 h(0,0), 86 v(0,0), 87 v(3,0) — row-0 panels that aren't the clean N/W/E edge
+    params: { shape: diagonal, restPos: 255, exclude: ["0,0,h", "0,0,v", "3,0,v"] }
     uiParams:
       - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
 

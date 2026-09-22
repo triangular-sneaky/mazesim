@@ -687,10 +687,13 @@ export const GENERATORS = {
    *
    * @param params.shape    'corners' | 'faces' | 'corner' | 'diagonal'
    * @param params.restPos  height for non-participating panels (default 255, all-up)
+   * @param params.exclude  panel keys ("x,y,orient") to force non-participating (off) — a
+   *                        layout-specific escape hatch for panels that shouldn't join a shape
    */
   geo(engine, params) {
     const restPos = params.restPos ?? 255;
     const shape   = params.shape ?? 'corners';
+    const exclude = new Set(params.exclude ?? []);
 
     const panels   = engine.list();
     const cells    = cellsOf(engine);
@@ -707,6 +710,7 @@ export const GENERATORS = {
     // (x,y+1) and the south wall of (x,y); v(x,y) is the west wall of (x+1,y) and the east
     // wall of (x,y). A wall is on the field's exterior when the cell on one side is missing.
     const isNorth = (p) => p.orient === 'h' &&  occupied.has(`${p.x},${p.y + 1}`) && !occupied.has(`${p.x},${p.y}`);
+    const isSouth = (p) => p.orient === 'h' &&  occupied.has(`${p.x},${p.y}`)     && !occupied.has(`${p.x},${p.y + 1}`);
     const isWest  = (p) => p.orient === 'v' &&  occupied.has(`${p.x + 1},${p.y}`) && !occupied.has(`${p.x},${p.y}`);
     const isEast  = (p) => p.orient === 'v' &&  occupied.has(`${p.x},${p.y}`)     && !occupied.has(`${p.x + 1},${p.y}`);
 
@@ -754,6 +758,7 @@ export const GENERATORS = {
 
     // Returns { pos } for participating panels, null for non-participating.
     const assign = (p) => {
+      if (exclude.has(`${p.x},${p.y},${p.orient}`)) return null; // forced off (layout-specific)
       switch (shape) {
         case 'corners': {
           if (minCornerDist(p) >= colRadius) return null;
@@ -769,13 +774,15 @@ export const GENERATORS = {
           return null;
         case 'diagonal': {
           // Flowie "Diagonal": the N wall stays up; the W and E walls drape diagonally down
-          // north→south; the whole SE staircase cut sits on the floor. All these lit, rest off.
+          // north→south; the OUTER STEPPED EDGE of the SE side sits on the floor (just the
+          // staircase boundary, not the whole triangle). All these lit, everything else off.
           if (p.orient === 'h' && p.y === minY) return { pos: 255 };                        // N wall — up
           if (p.orient === 'v' && p.x === minX) return { pos: diagDown(p.y, minY, maxY) };  // W wall — diag down (full height)
           if (p.orient === 'v' && p.x === maxVxByRow.get(p.y) && p.y <= maxFullWidthRow)
-            return { pos: diagDown(p.y, minY, maxFullWidthRow) };                            // E wall — diag down (shorter, north block)
-          if (p.y > maxFullWidthRow) return { pos: 0 };                                      // SE cut — all down
-          return null;                                                                       // everything else — off
+            return { pos: diagDown(p.y, minY, maxFullWidthRow) };                            // E wall — diag down (north block)
+          // SE stepped edge: south-facing h walls + the staircase's east-facing v walls → down.
+          if (isSouth(p) || (isEast(p) && p.y > maxFullWidthRow)) return { pos: 0 };
+          return null;                                                                       // interior / everything else — off
         }
         default: return null;
       }
