@@ -15,6 +15,8 @@
  * flipping target each time the panels arrive, so its amplitude is fixed while its period
  * follows the global speed. Only LED brightness (the glow) is driven directly here.
  */
+import { cellEdgeList } from '../model/layout.js';
+
 export class PrisonMode {
   constructor(engine, cells, config) {
     this.engine = engine;
@@ -63,14 +65,12 @@ export class PrisonMode {
     this.ctx = canvas.getContext('2d');
   }
 
-  /** The 4 panels framing cell (x,y): north/south h-walls, west/east v-walls. */
+  /** The 4 panels framing cell (x,y): N/S h-walls, W/E v-walls (h=south / v=east; see
+   *  model/layout.js — north=h(x,y-1), south=h(x,y), west=v(x-1,y), east=v(x,y)). */
   _edgesOf(x, y) {
-    return [
-      this.engine.get(x, y, 'h'),       // north
-      this.engine.get(x, y + 1, 'h'),   // south
-      this.engine.get(x, y, 'v'),       // west
-      this.engine.get(x + 1, y, 'v'),   // east
-    ].filter(Boolean);
+    return cellEdgeList(x, y)
+      .map((e) => this.engine.get(e.x, e.y, e.orient))
+      .filter(Boolean);
   }
 
   setActive(on) {

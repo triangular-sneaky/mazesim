@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PanelEngine } from '../src/model/engine.js';
 import { GENERATORS } from '../src/demos/player.js';
+import { cellEdgeList } from '../src/model/layout.js';
 
 // Minimal config mirroring layout.yaml's motion/room defaults.
 const CONFIG = {
@@ -10,26 +11,21 @@ const CONFIG = {
   blink: { peak: 0.7, attack: 0.08, sustain: 0.15, decay: 0.4 },
 };
 
-// Two vertically-adjacent cells => two single-cell blocks that SHARE the wall h(0,1)
-// (south edge of cell (0,0) == north edge of cell (0,1)).
+// Two vertically-adjacent cells => two single-cell blocks that SHARE the wall h(0,0)
+// (h=south/v=east convention: south edge of cell (0,0) == north edge of cell (0,1) == h(0,0)).
 const CELLS = [{ x: 0, y: 0 }, { x: 0, y: 1 }];
 const GROUPS = [
   { block: '1', cells: [{ x: 0, y: 0 }] }, // block A
   { block: '2', cells: [{ x: 0, y: 1 }] }, // block B
 ];
-const SHARED = [0, 1, 'h']; // wall between A and B
-const A_OWN = [0, 0, 'h'];  // A's north wall (never contested)
+const SHARED = [0, 0, 'h']; // wall between A and B (A's south == B's north)
+const A_OWN = [0, -1, 'h']; // A's north wall (never contested)
 
 function panelDefs(cells) {
   const seen = new Set();
   const defs = [];
   for (const c of cells) {
-    for (const e of [
-      { x: c.x, y: c.y, orient: 'h' },
-      { x: c.x, y: c.y + 1, orient: 'h' },
-      { x: c.x, y: c.y, orient: 'v' },
-      { x: c.x + 1, y: c.y, orient: 'v' },
-    ]) {
+    for (const e of cellEdgeList(c.x, c.y)) {
       const k = `${e.x},${e.y},${e.orient}`;
       if (seen.has(k)) continue;
       seen.add(k);
@@ -76,7 +72,7 @@ function simulate(actions, engine, watch, { dt = 20, end }) {
 
 // Schedule with cycles:2, delays 0 => blocks A,B,A,B activate at 0,T,2T,3T.
 // The discriminating phase is [T .. 2T]: block A deactivates (rises) while block B
-// activates (descends). The shared wall h(0,1) must RISE with A then be met/stolen by B.
+// activates (descends). The shared wall h(0,0) must RISE with A then be met/stolen by B.
 function run() {
   const engine = buildEngine();
   const actions = GENERATORS['blocks-descending'](engine, {
@@ -138,8 +134,8 @@ test('stolen wall tracks B\'s descent closely after the handoff', () => {
   const actions = GENERATORS['blocks-descending'](engine, {
     groups: GROUPS, cycles: 2, deactivationDelay: 0, activationDelay: 0,
   });
-  // Watch the shared wall against B's OWN (uncontested) wall as B descends.
-  const trace = simulate(actions, engine, { shared: SHARED, bOwn: [0, 2, 'h'] }, { end: 4 * T + 4000 });
+  // Watch the shared wall against B's OWN (uncontested) wall as B descends (B's south = h(0,1)).
+  const trace = simulate(actions, engine, { shared: SHARED, bOwn: [0, 1, 'h'] }, { end: 4 * T + 4000 });
 
   // Both should arrive at DOWN by the end of B's activation period (2T).
   const settled = trace.find((r) => r.t >= 2 * T - 200);

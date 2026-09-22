@@ -12,6 +12,8 @@
  * Direction reversal only triggers once the center panels report moving===false,
  * preventing the ease-in/ease-out from restarting mid-travel (jerk).
  */
+import { panelCenter, cellEdgeList, edgeKey } from '../model/layout.js';
+
 export class LullabyFloat {
   constructor(engine) {
     this.engine = engine;
@@ -46,17 +48,11 @@ export class LullabyFloat {
     const centerX = Math.round(cx);
     const centerY = Math.round(cy);
 
-    this._centerKeys = new Set([
-      `${centerX},${centerY},h`,
-      `${centerX},${centerY + 1},h`,
-      `${centerX},${centerY},v`,
-      `${centerX + 1},${centerY},v`,
-    ]);
+    this._centerKeys = new Set(cellEdgeList(centerX, centerY).map(edgeKey));
 
     const ccx = centerX + 0.5, ccy = centerY + 0.5;
     this._panelData = panels.map((p) => {
-      const px  = p.x + (p.orient === 'h' ? 0.5 : 0);
-      const py  = p.y + (p.orient === 'h' ? 0   : 0.5);
+      const { px, py } = panelCenter(p.x, p.y, p.orient);
       const dist     = Math.hypot(px - ccx, py - ccy);
       const isCenter = this._centerKeys.has(`${p.x},${p.y},${p.orient}`);
       return { p, dist, isCenter };

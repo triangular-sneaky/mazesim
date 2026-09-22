@@ -5,6 +5,8 @@
  *
  * An action = { t: ms, run: () => void }.
  */
+import { panelCenter, cellEdges, cellEdgeList, edgeKey } from '../model/layout.js';
+
 export class DemoPlayer {
   constructor(engine) {
     this.engine         = engine;
@@ -136,14 +138,12 @@ function particlesPlan(engine, params) {
   const ccx    = cx + 0.5, ccy = cy + 0.5;
 
   const maxDist = Math.max(1, ...panels.map((p) => {
-    const px = p.x + (p.orient === 'h' ? 0.5 : 0);
-    const py = p.y + (p.orient === 'h' ? 0   : 0.5);
+    const { px, py } = panelCenter(p.x, p.y, p.orient);
     return Math.hypot(px - ccx, py - ccy);
   }));
 
   const structData = panels.map((p) => {
-    const px      = p.x + (p.orient === 'h' ? 0.5 : 0);
-    const py      = p.y + (p.orient === 'h' ? 0   : 0.5);
+    const { px, py } = panelCenter(p.x, p.y, p.orient);
     const dist    = Math.hypot(px - ccx, py - ccy);
     const falloff = Math.max(0, 1 - dist / maxDist);
     const pos     = Math.round(topPos + (structureHeight - topPos) * falloff * elasticity);
@@ -163,8 +163,7 @@ function particlesPlan(engine, params) {
     const sy    = ccy + r * Math.sin(theta);
     let nearest = null, nd = Infinity;
     for (const p of panels) {
-      const px = p.x + (p.orient === 'h' ? 0.5 : 0);
-      const py = p.y + (p.orient === 'h' ? 0   : 0.5);
+      const { px, py } = panelCenter(p.x, p.y, p.orient);
       const d  = Math.hypot(px - sx, py - sy);
       if (d < nd) { nd = d; nearest = p; }
     }
@@ -447,8 +446,8 @@ export const GENERATORS = {
    *   - activationDelay:   activation end -> the NEXT block's activation begins.
    * With both 0, each block deactivates exactly as the next activates (a clean handoff).
    *
-   * A cell (x,y) is enclosed by 4 edge panels (edge-union model): h(x,y) north,
-   * h(x,y+1) south, v(x,y) west, v(x+1,y) east. Panels on a boundary between two blocks
+   * A cell (x,y) is enclosed by 4 edge panels (edge-union model, see model/layout.js):
+   * h(x,y-1) north, h(x,y) south, v(x-1,y) west, v(x,y) east. Panels on a boundary between two blocks
    * are shared; a shared wall FOLLOWS its current owner — the block that last activated
    * over it. While that owner is activated the wall is down + lit; when the owner
    * deactivates the wall rises + dims WITH it, until an activating block meets and STEALS
@@ -485,12 +484,7 @@ export const GENERATORS = {
     const nextDelay = params.activationDelay ?? 0;
     const cycles = params.cycles ?? 4;
 
-    const edgesOf = ({ x, y }) => [
-      { x, y, orient: 'h' },
-      { x, y: y + 1, orient: 'h' },
-      { x, y, orient: 'v' },
-      { x: x + 1, y, orient: 'v' },
-    ];
+    const edgesOf = ({ x, y }) => cellEdgeList(x, y);
 
     // Resolve each block's unique, existing edge panels once.
     const blockPanels = groups.map((g) => {
@@ -613,12 +607,7 @@ export const GENERATORS = {
     const centerY = params.centerY ?? Math.round(cy);
 
     const allPanels = engine.list();
-    const centerKeys = new Set([
-      `${centerX},${centerY},h`,
-      `${centerX},${centerY + 1},h`,
-      `${centerX},${centerY},v`,
-      `${centerX + 1},${centerY},v`,
-    ]);
+    const centerKeys = new Set(cellEdgeList(centerX, centerY).map(edgeKey));
     const centerPanels = allPanels.filter((p) => centerKeys.has(`${p.x},${p.y},${p.orient}`));
     const otherPanels  = allPanels.filter((p) => !centerKeys.has(`${p.x},${p.y},${p.orient}`));
 
@@ -682,8 +671,7 @@ export const GENERATORS = {
     // Compute the closest panel distance, then shift all times so that first ring ≤ cap.
     const rippleStartCap = params.rippleStartCap ?? 300;
     const rippleDistances = otherPanels.map((p) => {
-      const px = p.x + (p.orient === 'h' ? 0.5 : 0);
-      const py = p.y + (p.orient === 'h' ? 0   : 0.5);
+      const { px, py } = panelCenter(p.x, p.y, p.orient);
       return Math.hypot(px - ccx, py - ccy);
     });
     const firstDist = rippleDistances.length > 0 ? Math.min(...rippleDistances) : 0;
@@ -768,19 +756,20 @@ export const GENERATORS = {
     const minY  = Math.min(...ys), maxY = Math.max(...ys);
     const spanX = maxX - minX + 1, spanY = maxY - minY + 1;
 
-    const panelXY = (p) => ({
-      px: p.x + (p.orient === 'h' ? 0.5 : 0),
-      py: p.y + (p.orient === 'h' ? 0   : 0.5),
-    });
+    const panelXY = (p) => panelCenter(p.x, p.y, p.orient);
 
-    const isNorth = (p) => p.orient === 'h' &&  occupied.has(`${p.x},${p.y}`) && !occupied.has(`${p.x},${p.y - 1}`);
-    const isWest  = (p) => p.orient === 'v' &&  occupied.has(`${p.x},${p.y}`) && !occupied.has(`${p.x - 1},${p.y}`);
-    const isEast  = (p) => p.orient === 'v' && !occupied.has(`${p.x},${p.y}`) &&  occupied.has(`${p.x - 1},${p.y}`);
+    // Exterior walls, in the h=south / v=east convention: h(x,y) is the north wall of cell
+    // (x,y+1) and the south wall of (x,y); v(x,y) is the west wall of (x+1,y) and the east
+    // wall of (x,y). A wall is on the field's exterior when the cell on one side is missing.
+    const isNorth = (p) => p.orient === 'h' &&  occupied.has(`${p.x},${p.y + 1}`) && !occupied.has(`${p.x},${p.y}`);
+    const isWest  = (p) => p.orient === 'v' &&  occupied.has(`${p.x + 1},${p.y}`) && !occupied.has(`${p.x},${p.y}`);
+    const isEast  = (p) => p.orient === 'v' &&  occupied.has(`${p.x},${p.y}`)     && !occupied.has(`${p.x + 1},${p.y}`);
 
     // The last row that spans the full x width — use its south boundary as the
-    // "full-width south wall", ignoring the stairstepped arm/wedge below it.
+    // "full-width south wall", ignoring the stairstepped arm/wedge below it. h(x,R) IS the
+    // south edge of row R.
     const maxFullWidthRow    = Math.max(...cells.filter((c) => c.x === maxX).map((c) => c.y));
-    const isFullWidthSouth   = (p) => p.orient === 'h' && p.y === maxFullWidthRow + 1;
+    const isFullWidthSouth   = (p) => p.orient === 'h' && p.y === maxFullWidthRow;
 
     // Four structural corners: north pair equal-high, south pair equal-low.
     const armMaxX = Math.max(...cells.filter((c) => c.y === maxY).map((c) => c.x), minX);
@@ -897,8 +886,10 @@ export const GENERATORS = {
     const cellMap = new Map();
     for (const p of panels) {
       if (p.orient !== 'h') continue;
+      // p = h(p.x,p.y) is the SOUTH wall of candidate cell (p.x,p.y); the cell exists when
+      // all four of its edge walls (see model/layout.js) are present.
       const cx = p.x, cy = p.y;
-      if (has(cx, cy, 'h') && has(cx, cy + 1, 'h') && has(cx, cy, 'v') && has(cx + 1, cy, 'v')) {
+      if (cellEdgeList(cx, cy).every((e) => has(e.x, e.y, e.orient))) {
         const k = `${cx},${cy}`;
         if (!cellMap.has(k)) { cells.push({ cx, cy }); cellMap.set(k, { cx, cy }); }
       }
@@ -906,9 +897,10 @@ export const GENERATORS = {
     if (cells.length === 0) return [];
 
     // ---- Randomized DFS maze ------------------------------------------------
-    // Passages stored as the panel key of the removed wall between two cells.
-    // Moving south from (cx,cy): remove h(cx, cy+1).  Moving east: remove v(cx+1, cy).
-    // Moving north from (cx,cy): remove h(cx, cy).    Moving west: remove v(cx, cy).
+    // Passages stored as the panel key of the removed wall between two cells (h=south /
+    // v=east convention, see model/layout.js). The wall to a neighbour is that cell's edge:
+    //   south → h(cx,cy)      north → h(cx,cy-1)
+    //   east  → v(cx,cy)      west  → v(cx-1,cy)
     const passages = new Set();
     const visited  = new Set();
 
@@ -917,10 +909,10 @@ export const GENERATORS = {
     visited.add(`${start.cx},${start.cy}`);
 
     const DIRS = [
-      { dx: 0, dy:  1, wall: (cx, cy) => `${cx},${cy + 1},h` },
-      { dx: 0, dy: -1, wall: (cx, cy) => `${cx},${cy},h`     },
-      { dx:  1, dy: 0, wall: (cx, cy) => `${cx + 1},${cy},v` },
-      { dx: -1, dy: 0, wall: (cx, cy) => `${cx},${cy},v`     },
+      { dx: 0, dy:  1, wall: (cx, cy) => edgeKey(cellEdges(cx, cy).south) },
+      { dx: 0, dy: -1, wall: (cx, cy) => edgeKey(cellEdges(cx, cy).north) },
+      { dx:  1, dy: 0, wall: (cx, cy) => edgeKey(cellEdges(cx, cy).east)  },
+      { dx: -1, dy: 0, wall: (cx, cy) => edgeKey(cellEdges(cx, cy).west)  },
     ];
 
     while (stack.length > 0) {
@@ -950,17 +942,20 @@ export const GENERATORS = {
 
     // Candidates: border panels that exist and whose adjacent interior cell is not a corner cell
     // (i.e. skip the first and last entry in the border so the exit isn't flush with two walls).
+    // Border walls are each cell's exterior edge (h=south / v=east convention):
+    //   top row's NORTH edge = h(cx,minCY-1); left col's WEST edge = v(minCX-1,cy);
+    //   right col's EAST edge = v(maxCX,cy).
     const exits = [];
     for (const cx of cxVals.slice(1, -1)) {  // top border — skip leftmost/rightmost columns
-      const k = `${cx},${minCY},h`;
+      const k = edgeKey(cellEdges(cx, minCY).north);
       if (allKeys.has(k)) exits.push(k);
     }
     for (const cy of cyVals.slice(1, -1)) {  // left border — skip top/bottom rows
-      const k = `${minCX},${cy},v`;
+      const k = edgeKey(cellEdges(minCX, cy).west);
       if (allKeys.has(k)) exits.push(k);
     }
     for (const cy of cyVals.slice(1, -1)) {  // right border — skip top/bottom rows
-      const k = `${maxCX + 1},${cy},v`;
+      const k = edgeKey(cellEdges(maxCX, cy).east);
       if (allKeys.has(k)) exits.push(k);
     }
     if (exits.length > 0) passages.add(exits[Math.floor(Math.random() * exits.length)]);
