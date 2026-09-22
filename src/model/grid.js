@@ -47,23 +47,23 @@ export class Grid {
 
   /**
    * World-space placement of a panel: center point, and the box size along each axis.
-   * `h` = the cell's north-edge wall (wide face E-W); `v` = the west-edge wall (N-S).
-   * Each panel is centered along its edge and shorter than the cell pitch, leaving
-   * equal gaps at both ends — so the corners stay open and every grid square reads as
-   * a 4-panel "cube" frame (its own N+W walls plus the S+E walls of its neighbours).
+   * Physical-maze convention (matches midi-mapping.yaml + the HUD): `h` = the cell's
+   * SOUTH-edge wall (wide face E-W); `v` = the EAST-edge wall (N-S). Each panel is
+   * centered along its edge and shorter than the cell pitch, leaving equal gaps at both
+   * ends so the corners stay open.
    */
   placement(panel) {
     const nw = this.cellNW(panel.x, panel.y);
     const y = this.heightFor(panel.position);
     if (panel.orient === 'h') {
       return {
-        center: { x: nw.x + this.cellWidth / 2, y, z: nw.z },
+        center: { x: nw.x + this.cellWidth / 2, y, z: nw.z + this.cellDepth },
         size: { x: this.panelWidth, y: this.panelHeight, z: this.panelThickness },
       };
     }
     // 'v'
     return {
-      center: { x: nw.x, y, z: nw.z + this.cellDepth / 2 },
+      center: { x: nw.x + this.cellWidth, y, z: nw.z + this.cellDepth / 2 },
       size: { x: this.panelThickness, y: this.panelHeight, z: this.panelWidth },
     };
   }

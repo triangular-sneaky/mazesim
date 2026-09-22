@@ -29,19 +29,43 @@
  *
  * Value convention (per note in the levels map): 1 = off … 127 = max. 0 is reserved
  * (it would read as a note-off), so the dimmest usable "on" level is 1.
+ *
+ * Beyond the fixed-`pairs` investigation sweep (`move`), this also exposes the stateful
+ * drive primitives used by the maze HUD, both paced through the same token bucket:
+ *   sendSteps(Map<note,{steps,vel}>) — emit EXACTLY `steps` (off,on@vel) pairs per note
+ *                                      (the planner decides the count); sequential.
+ *   sendOff(notes)                   — one bare note-off per note (light off, no move).
+ * `deadNotes` is a hard send-ban set kept in sync with the HUD's dead panels.
  */
 export class MazeMidiController {
   constructor(opts = {}) {
-    this.delayMs   = opts.delayMs ?? 2;  // wire gap between consecutive messages
+    this.delayMs   = opts.delayMs ?? 3;  // wire gap between consecutive messages (intra-note)
     this.pairs     = opts.pairs ?? 16;   // (note-off, note-on) pairs per note; 16 = one full move cycle
     this.interleave = opts.interleave ?? false; // true: round-robin notes; false: one note fully, then next
+    this.rateHz    = opts.rateHz ?? 300; // token-bucket refill: sustained avg msgs/sec (long-run ceiling)
+    this.burst     = opts.burst ?? 64;   // token-bucket capacity: max msgs in a burst before throttling
     this.enabled   = false;
 
     this._requested = false;
     this.access     = null;
     this.selectedOutputId = null;
 
-    this._buildUI();
+    this._runId  = 0;    // bumped to invalidate an in-flight paced run
+    this._timers = [];   // pending timer ids for the current run
+
+    // Hard guard: notes here are never sent (belt-and-suspenders with the HUD's own
+    // dead filter). The HUD keeps this in sync with tracked `dead` panels.
+    this.deadNotes = new Set();
+
+    // Clock + timer are injectable so the token-bucket guards can be driven by a virtual
+    // clock in tests; they default to the real browser globals (identical behavior).
+    this._now       = opts.now       ?? (() => performance.now());
+    this._schedule  = opts.schedule  ?? ((fn, ms) => setTimeout(fn, ms));
+    this._unschedule = opts.unschedule ?? ((id) => clearTimeout(id));
+
+    // Skip DOM construction in a headless (test) context — everything below the wire
+    // (pacing, guards, sends) works without the UI, which `_setStatus` no-ops against.
+    if (typeof document !== 'undefined') this._buildUI();
   }
 
   // ---- Sending --------------------------------------------------------------
@@ -57,10 +81,11 @@ export class MazeMidiController {
   }
 
   /**
-   * Set brightness on a set of panels while holding them in place.
+   * Drive a set of panels: for each note, emit `pairs` (note-off, note-on) pairs so
+   * the panel walks its move cycle and lands with the light at the requested level.
    * @param {Map<number, number>} levels  note number → level (1=off … 127=max)
    */
-  setLight(levels) {
+  move(levels) {
     const out = this._output();
     if (!out) { this._setStatus('no MIDI output selected', false); return false; }
 
@@ -71,41 +96,145 @@ export class MazeMidiController {
 
     const pairs  = Math.max(1, this.pairs | 0);
     const rounds = pairs * 2;                      // pair = (off, on)
-    const step   = Math.max(0, this.delayMs);
     const msgOf  = (note, vel, r) =>
       ((r % 2) === 1) ? [0x90, note, vel] : [0x80, note, 0]; // even round = note-off, odd = note-on
 
-    // Build the ordered message list, then schedule it.
-    const msgs = [];
+    // Units = message groups that must be sent contiguously (never split mid-note,
+    // since a note's note-ons must arrive in one run). Sequential: one unit per note.
+    // Interleaved: the whole round-robin stream is one indivisible unit.
+    const units = [];
     if (this.interleave) {
-      // round-robin: message r of every note before advancing to r+1
+      const all = [];
       for (let r = 0; r < rounds; r++)
-        for (const [note, vel] of entries) msgs.push(msgOf(note, vel, r));
+        for (const [note, vel] of entries) all.push(msgOf(note, vel, r));
+      units.push(all);
     } else {
-      // sequential: all 2*pairs messages of one note, then the next note
-      for (const [note, vel] of entries)
-        for (let r = 0; r < rounds; r++) msgs.push(msgOf(note, vel, r));
+      for (const [note, vel] of entries) {
+        const u = [];
+        for (let r = 0; r < rounds; r++) u.push(msgOf(note, vel, r));
+        units.push(u);
+      }
     }
-
-    let when = performance.now() + 1;              // tiny lead so all sends are scheduled
-    for (const m of msgs) { out.send(m, when); when += step; }
-    const count = msgs.length;
 
     const lo = Math.min(...entries.map(([n]) => n));
     const hi = Math.max(...entries.map(([n]) => n));
-    const dur = (count * step).toFixed(0);
     const mode = this.interleave ? 'interleaved' : 'sequential';
-    this._setStatus(`sent ${count} msgs · notes ${lo}–${hi} · ${pairs} pairs · ${mode} · ~${dur}ms`, true);
-    if (this._activityEl) this._activityEl.textContent = `${entries.length} notes → ${count} msgs`;
+    return this._pace(out, units, `notes ${lo}–${hi} · ${pairs} pairs · ${mode}`, entries.length);
+  }
+
+  /**
+   * Send exact per-panel step counts. For each note, emit `steps` (note-off, note-on@vel)
+   * PAIRS sequentially — the panel walks `steps` positions along its 16-step cycle and
+   * the light lands at `vel`. This is the primary drive path for the stateful HUD; the
+   * planner (mazeState.js) decides `steps`, this just puts them on the wire under the
+   * same guards as `move()`.
+   * @param {Map<number, {steps:number, vel:number}>} plan  note → {steps, vel (1..127)}
+   */
+  sendSteps(plan) {
+    const out = this._output();
+    if (!out) { this._setStatus('no MIDI output selected', false); return false; }
+
+    const units = [];
+    let lo = Infinity, hi = -Infinity, noteCount = 0, totalSteps = 0;
+    for (const [rawNote, spec] of plan.entries()) {
+      const note = rawNote | 0;
+      if (note < 0 || note > 127) continue;
+      if (this.deadNotes.has(note)) continue;      // hard guard: never drive a dead panel
+      const steps = Math.max(0, (spec?.steps | 0));
+      if (steps <= 0) continue;                    // no movement requested
+      const vel = Math.max(1, Math.min(127, spec?.vel | 0));
+      const u = [];
+      for (let s = 0; s < steps; s++) { u.push([0x80, note, 0]); u.push([0x90, note, vel]); }
+      units.push(u);
+      lo = Math.min(lo, note); hi = Math.max(hi, note);
+      noteCount++; totalSteps += steps;
+    }
+    if (!units.length) { this._setStatus('nothing to send (0 steps / all dead)', false); return false; }
+    return this._pace(out, units, `${noteCount} notes · ${totalSteps} steps · notes ${lo}–${hi}`, noteCount);
+  }
+
+  /**
+   * Turn lights off in place: one bare note-off per note, NO movement. The cheap path
+   * for "light off without a stay loop". Dead panels are skipped.
+   * @param {Iterable<number>} notes
+   */
+  sendOff(notes) {
+    const out = this._output();
+    if (!out) { this._setStatus('no MIDI output selected', false); return false; }
+    const units = [];
+    for (const raw of notes) {
+      const note = raw | 0;
+      if (note < 0 || note > 127 || this.deadNotes.has(note)) continue;
+      units.push([[0x80, note, 0]]);
+    }
+    if (!units.length) { this._setStatus('nothing to turn off', false); return false; }
+    return this._pace(out, units, `${units.length} notes off (no move)`, units.length);
+  }
+
+  /**
+   * Token-bucket paced sender shared by move/sendSteps/sendOff. `units` are message
+   * groups sent contiguously (never split): refill `rate` msgs/sec (sustained ceiling),
+   * capacity `cap` msgs (burst budget). Intra-unit messages are timestamp-scheduled
+   * `step` apart; unit-to-unit cadence uses real setTimeout so it holds even if the
+   * browser ignores send timestamps.
+   */
+  _pace(out, units, label, noteCount) {
+    this._cancel();                                // supersede any in-flight run
+    const runId = this._runId;
+    const total = units.reduce((n, u) => n + u.length, 0);
+    const step  = Math.max(0, this.delayMs);
+    this._setStatus(`sending ${total} msgs · ${label}…`, true);
+    if (this._activityEl) this._activityEl.textContent = `${noteCount} notes → ${total} msgs`;
+
+    const rate = Math.max(1, this.rateHz);
+    const cap  = Math.max(1, this.burst | 0);
+    let tokens = cap;                              // start full
+    let last   = this._now();
+
+    const pump = (i) => {
+      if (runId !== this._runId) return;           // cancelled / superseded
+      if (i >= units.length) {
+        this._setStatus(`sent ${total} msgs · ${label}`, true);
+        return;
+      }
+      const now = this._now();
+      tokens = Math.min(cap, tokens + (now - last) / 1000 * rate);
+      last = now;
+
+      const cost = units[i].length;
+      const need = Math.min(cost, cap);            // waiting past a full bucket never helps
+      if (tokens < need) {
+        const waitMs = Math.ceil((need - tokens) / rate * 1000);
+        this._timers.push(this._schedule(() => pump(i), waitMs));
+        return;
+      }
+
+      let when = now + 1;                          // tiny lead so all sends are scheduled
+      for (const m of units[i]) { out.send(m, when); when += step; }
+      tokens -= cost;
+
+      const unitDur = Math.max(1, cost * step);    // wall time this unit occupies the wire
+      this._timers.push(this._schedule(() => pump(i + 1), unitDur));
+    };
+
+    pump(0);
     return true;
+  }
+
+  /** Cancel any in-flight paced run (clears pending timers, invalidates callbacks). */
+  _cancel() {
+    for (const t of this._timers) this._unschedule(t);
+    this._timers = [];
+    this._runId++;
   }
 
   /** Kill every light: one note-off (0x80) per note 0–127. No movement. */
   panic() {
+    this._cancel();                                // stop any in-flight move
     const out = this._output();
     if (!out) { this._setStatus('no MIDI output selected', false); return false; }
     const step = Math.max(0, this.delayMs);
-    let when = performance.now() + 1;
+    let when = this._now() + 1;
     for (let n = 0; n <= 127; n++) { out.send([0x80, n, 0], when); when += step; }
     this._setStatus('panic — all notes 0–127 off', true);
     if (this._activityEl) this._activityEl.textContent = 'panic (128 note-offs)';
@@ -227,6 +356,34 @@ export class MazeMidiController {
     delayHint.textContent = 'wire gap between messages';
     delayRow.append(this._delayInput, delayHint);
 
+    // Rate limit (token-bucket refill: sustained avg msgs/sec ceiling) — a hard guard.
+    const rateRow = document.createElement('div');
+    rateRow.className = 'row';
+    rateRow.innerHTML = '<label>rate (msg/s)</label>';
+    this._rateInput = numInput(1, 2000, this.rateHz);
+    this._rateInput.addEventListener('change', () => {
+      const v = Math.max(1, Math.min(2000, Math.round(Number(this._rateInput.value) || 1)));
+      this._rateInput.value = v; this.rateHz = v;
+    });
+    const rateHint = document.createElement('span');
+    rateHint.className = 'hint'; rateHint.style.margin = '0';
+    rateHint.textContent = 'sustained ceiling (long-run avg)';
+    rateRow.append(this._rateInput, rateHint);
+
+    // Burst (token-bucket capacity: max msgs in a burst before throttling) — a hard guard.
+    const burstRow = document.createElement('div');
+    burstRow.className = 'row';
+    burstRow.innerHTML = '<label>burst</label>';
+    this._burstInput = numInput(1, 512, this.burst);
+    this._burstInput.addEventListener('change', () => {
+      const v = Math.max(1, Math.min(512, Math.round(Number(this._burstInput.value) || 1)));
+      this._burstInput.value = v; this.burst = v;
+    });
+    const burstHint = document.createElement('span');
+    burstHint.className = 'hint'; burstHint.style.margin = '0';
+    burstHint.textContent = 'max msgs before throttling kicks in';
+    burstRow.append(this._burstInput, burstHint);
+
     // Pairs (controller property) — (note-off, note-on) pairs per note
     const pairsRow = document.createElement('div');
     pairsRow.className = 'row';
@@ -291,7 +448,7 @@ export class MazeMidiController {
       'Sends 16 (note-off, note-on) pairs per note, interleaved across the sweep, to ' +
       'set brightness while holding panels in place. 1 = off, 127 = max.';
 
-    el.append(enableRow, outRow, rangeRow, brightRow, delayRow, pairsRow, interRow, fireRow, statusRow, actRow, hint);
+    el.append(enableRow, outRow, rangeRow, brightRow, delayRow, rateRow, burstRow, pairsRow, interRow, fireRow, statusRow, actRow, hint);
     this.el = el;
   }
 
@@ -303,7 +460,7 @@ export class MazeMidiController {
     const level = Math.max(1, Math.min(127, Math.round(Number(this._brightVal.value) || 1)));
     const levels = new Map();
     for (let n = a; n <= b; n++) levels.set(n, level);
-    this.setLight(levels);
+    this.move(levels);
   }
 
   _setStatus(text, ok = false) {

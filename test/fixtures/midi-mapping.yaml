@@ -1,3 +1,8 @@
+# FROZEN TEST FIXTURE — a copy of the hardware note map for the unit tests.
+# Do NOT wire this into the app; tests read this instead of config/midi-mapping.yaml so
+# they never break when the live config is edited. Keeps the canonical shape: 86 panels,
+# notes 23..110 minus {83,108}, and three (!) dead-init markers (54, 35, 25).
+#
 # Physical maze → MIDI note map, transcribed from the hand-drawn grid.
 #
 # Structure: the maze is read top→bottom as alternating bands of wall panels.
@@ -20,13 +25,13 @@ grid:
     h: [A#3=70 C#7=109 C#5=85 B2=59 E5=88 B6=107]
   - y: 1
     v: [A#2=58 C5=84 F5=89 C3=60 A#6=106 A#4=82]
-    h: [A2=57(!) D#1=39 C#3=61 F#5=90 A6=105 A4=81]
+    h: [A2=57 D#1=39 C#3=61 F#5=90 A6=105 A4=81]
   - y: 2
     v: [D1=38 G#2=56 D3=62 E1=40 G#4=80 G5=91]
     h: [C#6=97 G2=55 C#1=37 D#0=27 F1=41 D#3=63]
   - y: 3
-    v: [F#2=54 C1=36 D0=26 E0=28 F#1=42 E3=64]
-    h: [F2=53 B0=35 C#0=25 B-1=23 F0=29 G1=43]
+    v: [F#2=54(!) C1=36 D0=26 E0=28 F#1=42 E3=64]
+    h: [F2=53 B0=35(!) C#0=25(!) B-1=23 F0=29 G1=43]
   - y: 4
     v: [E2=52 F#4=78 C0=24 A#0=34 G#1=44 G#5=92]
     h: [D6=98 G#6=104 F4=77 D#2=51 A0=33 B5=95]

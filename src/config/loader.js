@@ -3,6 +3,8 @@ import yaml from 'js-yaml';
 import layoutText from '../../config/layout.yaml?raw';
 import demosText from '../../config/demos.yaml?raw';
 import loopsText from '../../config/loops.yaml?raw';
+import midiMappingText from '../../config/midi-mapping.yaml?raw';
+import { parseMidiMapping } from './midiMapping.js';
 
 /**
  * Parse the layout YAML into a validated config object plus an expanded panel list.
@@ -72,6 +74,14 @@ export function parseMatrix(text) {
     y++;
   }
   return cells;
+}
+
+/**
+ * Load + parse `config/midi-mapping.yaml` (the physical maze's note→panel map) from the
+ * bundled `?raw` text. The parsing lives in the pure, unit-tested `parseMidiMapping`.
+ */
+export function loadMidiMapping() {
+  return parseMidiMapping(midiMappingText);
 }
 
 export function loadDemos() {

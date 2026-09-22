@@ -53,16 +53,16 @@ export class GridMap {
       }
     }
 
-    // 2) Every PANEL is a wall = an edge segment. h(x,y) is the north edge of cell (x,y),
-    //    v(x,y) the west edge — each shared with the adjacent cell, drawn once. Colour by
-    //    that panel's OWN state: grey by height, warm amber by brightness (the LED glow),
-    //    so a "dim going up" panel fades from amber to dark as it rises.
+    // 2) Every PANEL is a wall = an edge segment. h(x,y) is the SOUTH edge of cell (x,y),
+    //    v(x,y) the EAST edge (physical-maze convention). Colour by that panel's OWN
+    //    state: grey by height, warm amber by brightness (the LED glow), so a "dim going
+    //    up" panel fades from amber to dark as it rises.
     ctx.lineCap = 'round';
     for (const p of this.engine.list()) {
       const x0 = pad + p.x * cell, y0 = pad + p.y * cell;
       const seg = p.orient === 'h'
-        ? [x0 + 3, y0, x0 + cell - 3, y0]     // north wall — horizontal
-        : [x0, y0 + 3, x0, y0 + cell - 3];    // west wall — vertical
+        ? [x0 + 3, y0 + cell, x0 + cell - 3, y0 + cell]   // south wall — horizontal
+        : [x0 + cell, y0 + 3, x0 + cell, y0 + cell - 3];  // east wall — vertical
       const shade = Math.round(45 + (p.position / 255) * 120); // height -> grey
       const stroke = (style, w) => {
         ctx.strokeStyle = style; ctx.lineWidth = w;

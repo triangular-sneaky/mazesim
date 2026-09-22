@@ -1,4 +1,6 @@
-import { loadLayout, loadDemos, loadLoops } from './config/loader.js';
+import { loadLayout, loadDemos, loadLoops, loadMidiMapping } from './config/loader.js';
+import { MazeState } from './model/mazeState.js';
+import { MazeHud } from './ui/mazeHud.js';
 import { Grid } from './model/grid.js';
 import { PanelEngine } from './model/engine.js';
 import { SceneView } from './render/scene.js';
@@ -23,14 +25,79 @@ function fail(msg) {
   console.error(msg);
 }
 
+/**
+ * Sanity-check the MIDI note map against the engine and the known hardware facts.
+ * Warns (never throws) — the physical map is the source of truth; a mismatch means the
+ * sim layout drifted, not that the map is wrong.
+ */
+function validateMidiMap(map, engine) {
+  for (const w of map.warnings) console.warn(`midi-map: ${w}`);
+  const notes = [...map.byNote.keys()].sort((a, b) => a - b);
+  if (notes.length !== 86) console.warn(`midi-map: expected 86 panels, got ${notes.length}`);
+  const expected = new Set();
+  for (let n = 23; n <= 110; n++) if (n !== 83 && n !== 108) expected.add(n);
+  for (const n of notes) if (!expected.has(n)) console.warn(`midi-map: unexpected note ${n} (outside 23..110 minus {83,108})`);
+  for (const n of expected) if (!map.byNote.has(n)) console.warn(`midi-map: missing expected note ${n}`);
+  for (const [note, m] of map.byNote) {
+    if (!engine.get(m.x, m.y, m.orient)) {
+      console.warn(`midi-map: note ${note} (${m.name}) -> ${m.orient}(${m.x},${m.y}) has no engine panel`);
+    }
+  }
+}
+
+/**
+ * Make every sidebar `.section` collapsible: a caret in the header folds the body away.
+ * Collapsed state persists in localStorage so the operator's layout survives a reload.
+ * Clicks that land on an interactive header control (the mode seg, buttons, inputs) are
+ * ignored so they don't also toggle the fold.
+ */
+function setupCollapsibleSections() {
+  const KEY = 'sectionCollapsed.v1';
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { saved = {}; }
+  const sections = [...document.querySelectorAll('#sidebar .section')];
+  const persist = () => {
+    const state = {};
+    for (const s of sections) state[s.dataset.key] = s.classList.contains('collapsed');
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* ignore */ }
+  };
+  sections.forEach((section, i) => {
+    const h2 = section.querySelector('h2');
+    if (!h2) return;
+    const key = section.id || `sec-${i}`;
+    section.dataset.key = key;
+    const caret = document.createElement('span');
+    caret.className = 'caret';
+    caret.textContent = '▸';
+    h2.prepend(caret);
+    if (saved[key]) section.classList.add('collapsed');
+    h2.addEventListener('click', (e) => {
+      if (e.target.closest('button, input, select, .seg')) return; // header control, not a fold
+      section.classList.toggle('collapsed');
+      persist();
+    });
+  });
+}
+
 function main() {
   // Reload the tab automatically when a newer build is deployed (runs regardless of
   // whether the 3D view initializes, so a WebGL-failed page still self-updates).
   startAutoReload();
 
-  let config, cells, panels, demos, loops;
+  let config, cells, panels, demos, loops, midiMap;
   try {
-    ({ config, cells, panels } = loadLayout());
+    // layout.yaml supplies only the dimensions (room/grid/panel/motion/blink). The panel
+    // SET — which walls exist and where — is the physical maze itself, read from
+    // midi-mapping.yaml, so the 3D view is the real 86-panel layout (h=south, v=east).
+    ({ config } = loadLayout());
+    midiMap = loadMidiMapping();
+    panels = [...midiMap.byNote.values()].map((m) => ({ x: m.x, y: m.y, orient: m.orient }));
+    const seen = new Set();
+    cells = [];
+    for (const p of panels) {
+      const k = `${p.x},${p.y}`;
+      if (!seen.has(k)) { seen.add(k); cells.push({ x: p.x, y: p.y }); }
+    }
     demos = loadDemos();
     loops = loadLoops();
   } catch (e) {
@@ -122,6 +189,15 @@ function main() {
   const mazeMidi = new MazeMidiController();
   document.getElementById('midi-investigation-section').appendChild(mazeMidi.el);
 
+  // Stateful physical-maze control: note map -> per-panel (z,v) tracker -> HUD.
+  // (midiMap was loaded up top — it also drives the engine's panel set.)
+  validateMidiMap(midiMap, engine);
+  const mazeState = new MazeState(midiMap.byNote);
+  const mazeHud = new MazeHud(document.getElementById('maze-hud-section'), {
+    engine, grid, view, state: mazeState, midi: mazeMidi,
+    viewport, cells,
+  });
+
   new DemoBank(document.getElementById('demo-list'), demos, player, {
     onManual: stopCycle,
     onCycle: startCycle,
@@ -194,6 +270,9 @@ function main() {
     requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
   });
 
+  // Fold/unfold sidebar sections (state persisted). Run after every section is mounted.
+  setupCollapsibleSections();
+
   // Animation loop
   let last = performance.now();
   function frame(now) {
@@ -203,11 +282,14 @@ function main() {
     prison.tick(dt);       // drives caged panels directly; no-op unless its controls are open
     lullabyFloat.tick(dt); // brightness only — reads actual panel positions; no-op when inactive
     midi.tick(dt);         // re-asserts held brightness; mutes movement LEDs when mute is on
+    mazeHud.tick(dt);      // mirror tracked belief onto the sim (no-op unless mirror→3D is on)
     meshes.sync();
     gridMap.draw();
     cellBoard.draw();
+    mazeHud.draw();        // 2D belief canvas (always live)
     controls.refresh();
     view.render();
+    mazeHud.updateOverlay(); // reposition virtual chips against the fresh camera (always live)
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

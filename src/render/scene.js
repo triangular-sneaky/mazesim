@@ -279,6 +279,23 @@ export class SceneView {
     this.controls.update();
   }
 
+  /**
+   * Project a world point to CSS pixel coordinates inside the canvas, for positioning
+   * HTML overlay widgets (the maze HUD). `visible` is false when the point is behind the
+   * camera or outside the frustum, so callers can hide off-screen widgets.
+   * @param {{x:number,y:number,z:number}} p  world-space point
+   * @returns {{x:number, y:number, visible:boolean}}
+   */
+  worldToScreen(p) {
+    const v = new THREE.Vector3(p.x, p.y, p.z).project(this.camera);
+    const el = this.renderer.domElement;
+    const w = el.clientWidth, h = el.clientHeight;
+    const x = (v.x * 0.5 + 0.5) * w;
+    const y = (-v.y * 0.5 + 0.5) * h;
+    const visible = v.z < 1 && v.x >= -1 && v.x <= 1 && v.y >= -1 && v.y <= 1;
+    return { x, y, visible };
+  }
+
   _onResize(container) {
     const w = container.clientWidth, h = container.clientHeight;
     this.camera.aspect = w / h;
