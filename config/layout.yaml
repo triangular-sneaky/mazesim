@@ -30,7 +30,7 @@ motion:
   travelMin: 0.80   # world Y of panel center at position 0 (near floor)
   travelMax: 3.60   # world Y of panel center at position 255 (just below the 3.85 m rail)
   restPosition: 255 # initial position on load (all up)
-  velocity: 30      # cruise speed (position-units/sec) — global default, adjustable live in the UI
+  velocity: 23      # cruise speed (position-units/sec) — global default, adjustable live in the UI
   ease: 0.25        # ramp fraction at each end (0 = pure constant speed, 0.5 = full ease)
   tempoReference: 120 # speed at which movement intervals play literally; timing scales
                       # inversely with `velocity` so movements keep their shape at any speed
@@ -53,8 +53,8 @@ blink:
 # section, but these are the load-time defaults the maze controller boots with.
 midi:
   rateHz: 100       # token-bucket sustained ceiling (messages/sec)
-  burst: 32         # token-bucket capacity (max messages in a burst before throttling)
-  delayMs: 6        # wire gap between consecutive messages (ms)
+  burst: 32        # token-bucket capacity (max messages in a burst before throttling)
+  delayMs: 1        # wire gap between consecutive messages (ms)
 
 # Occupied-cell matrix. Row 0 = north (back), column 0 = west (left).
 # Any non-space, non-'.' char = occupied. '.' or space = empty.

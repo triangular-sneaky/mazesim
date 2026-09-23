@@ -496,7 +496,8 @@ export const GENERATORS = {
    * @param params.deactivationDelay  ms; activation end -> deactivation begin (default 0)
    * @param params.activationDelay    ms; activation end -> next activation begin (default 0)
    * @param params.cycles   times to run through all blocks (default 4)
-   * @param params.rim      truthy → the E wall + SE diagonal rim moves with block 1
+   * @param params.rim      truthy → the E wall + SE diagonal rim moves with block 1, but travels
+   *                        the FULL range (all the way down to the floor and back up)
    */
   'blocks-descending'(engine, params) {
     const groups = params.groups || [];
