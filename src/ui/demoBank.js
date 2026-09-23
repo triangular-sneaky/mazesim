@@ -262,11 +262,23 @@ export class DemoBank {
           const paramsOpen = hasUi && this._openParams.has(demo.id);
           const liveP = hasUi ? this._getParams(demo) : (demo.params || {});
 
+          // One movement active at a time: the running timeline's button is Stop; starting
+          // a movement closes any open interactive controller (reconciled below).
+          const playing = this.player.isRunning() === demo.id;
           const playBtn = document.createElement('button');
-          playBtn.textContent = 'Play';
+          playBtn.textContent = playing ? 'Stop' : 'Play';
+          playBtn.classList.toggle('primary', playing);
           playBtn.addEventListener('click', () => {
-            this.onManual?.();
-            this.player.play({ ...demo, params: liveP });
+            if (this.player.isRunning() === demo.id) {
+              this.player.stop();
+              this._haltTransport();  // drop any queued sends so the maze stops now
+            } else {
+              this.onManual?.();
+              this._open.clear();     // close any open interactive controller — one active at a time
+              this._haltTransport();  // clear the previous movement's queued sends before the new one
+              this.player.play({ ...demo, params: liveP });
+            }
+            this._render();
           });
 
           if (hasUi) {
@@ -309,7 +321,7 @@ export class DemoBank {
 
     const stop = document.createElement('button');
     stop.textContent = 'Stop';
-    stop.addEventListener('click', () => { this.onManual?.(); this.player.stop(); });
+    stop.addEventListener('click', () => { this.onManual?.(); this.stopAll(); });
 
     const cycle = document.createElement('button');
     cycle.textContent = 'Cycle demos';
@@ -317,5 +329,19 @@ export class DemoBank {
 
     transport.append(cycle, stop);
     this.listEl.append(transport);
+  }
+
+  /** Stop every movement: halt the timeline player, close any interactive controller, and drop
+   *  any MIDI still queued in the transport so the maze stops immediately (not after the backlog). */
+  stopAll() {
+    this._open.clear();
+    this.player.stop();
+    this._haltTransport();
+    this._render();   // reconcile deactivates the closed controllers
+  }
+
+  /** Flush the MIDI transport's paced queue (via the state-backed engine's transport). */
+  _haltTransport() {
+    this.engine?.midi?.flush?.();
   }
 }

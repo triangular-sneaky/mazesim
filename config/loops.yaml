@@ -20,7 +20,7 @@
 # Add `params:` to an entry to override individual keys for that entry only.
 
 blocks-descending:
-  downPos: 109           # activated height — 109 ≈ mid-room (room.height/2 at default layout)
+  downPos: 109           # activated height — 109 ≈ mid-room (blocks descend to mid)
   upPos: 255             # deactivated height (top)
   cycles: 100             # how many full rounds through all blocks
   deactivationDelay: 0   # ms from activation end to that block's deactivation
@@ -35,10 +35,12 @@ blocks-descending:
     sustain: 0           #   s
     decay: 0.05          #   s — snap off in 50 ms so rising blocks are dark almost immediately
     peak: 1.0
+  uiParams:              # per-loop editable options (⚙)
+    - { key: rim, type: checkbox, label: rim (E wall + SE diagonal) moves with block 1 }
 
 blocks-on:
   generator: blocks-descending   # reuses the same generator, just with different params
-  downPos: 109           # activated height — 109 ≈ mid-room (room.height/2 at default layout)
+  downPos: 109           # activated height — 109 ≈ mid-room (blocks descend to mid)
   upPos: 255             # deactivated height (top)
   cycles: 100             # how many full rounds through all blocks
   deactivationDelay: 0   # ms from activation end to that block's deactivation
@@ -53,6 +55,8 @@ blocks-on:
     sustain: 3600          #   s
     decay: 0          #   s — snap off in 50 ms so rising blocks are dark almost immediately
     peak: 1.0
+  uiParams:              # per-loop editable options (⚙)
+    - { key: rim, type: checkbox, label: rim (E wall + SE diagonal) moves with block 1 }
 
 
 loops:

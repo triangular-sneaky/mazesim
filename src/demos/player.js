@@ -5,11 +5,19 @@
  *
  * An action = { t: ms, run: () => void }.
  */
-import { panelCenter, cellEdges, cellEdgeList, edgeKey } from '../model/layout.js';
+import { panelCenter, cellEdges, cellEdgeList, edgeKey, seRimPanels } from '../model/layout.js';
 
 export class DemoPlayer {
-  constructor(engine) {
+  /**
+   * @param engine
+   * @param {{schedule?:(fn,ms)=>any, unschedule?:(id)=>void}} [opts] timer source — inject the
+   *   background clock so scheduled actions keep firing when the tab is hidden; defaults to
+   *   the native (background-throttled) setTimeout/clearTimeout.
+   */
+  constructor(engine, opts = {}) {
     this.engine         = engine;
+    this._schedule      = opts.schedule   ?? ((fn, ms) => setTimeout(fn, ms));
+    this._unschedule    = opts.unschedule ?? ((id) => clearTimeout(id));
     this._timers        = [];
     this._triggerTimers = [];
     this._running       = null;
@@ -18,8 +26,8 @@ export class DemoPlayer {
   }
 
   stop() {
-    for (const id of this._timers)        clearTimeout(id);
-    for (const id of this._triggerTimers) clearTimeout(id);
+    for (const id of this._timers)        this._unschedule(id);
+    for (const id of this._triggerTimers) this._unschedule(id);
     this._timers        = [];
     this._triggerTimers = [];
     this._running       = null;
@@ -53,7 +61,7 @@ export class DemoPlayer {
     if (!this._triggerArmed || !this.isCurrentTriggerable()) return false;
     const burst = TRIGGERABLE[this._demo.generator](this.engine, this._demo.params || {});
     for (const a of burst) {
-      this._triggerTimers.push(setTimeout(a.run, a.t));
+      this._triggerTimers.push(this._schedule(a.run, a.t));
     }
     return true;
   }
@@ -72,13 +80,13 @@ export class DemoPlayer {
     // Trigger-armed mode: only settle the structure, suppress auto-loop.
     if (this._triggerArmed && TRIGGERABLE[demo.generator]) {
       const actions = gen(this.engine, { ...params, staticOnly: true });
-      for (const a of actions) this._timers.push(setTimeout(a.run, a.t));
+      for (const a of actions) this._timers.push(this._schedule(a.run, a.t));
       return;
     }
 
     const actions = gen(this.engine, params);
     for (const a of actions) {
-      this._timers.push(setTimeout(a.run, a.t));
+      this._timers.push(this._schedule(a.run, a.t));
     }
     // Auto-retrigger: `period > 0` waits N seconds after the movement ends then replays;
     // `loop: true` replays immediately when the last action fires (continuous loop).
@@ -87,7 +95,7 @@ export class DemoPlayer {
     if (period > 0 || loop) {
       const endT  = actions.length ? Math.max(...actions.map((a) => a.t)) : 0;
       const delay = period > 0 ? endT + period * 1000 : endT;
-      this._timers.push(setTimeout(() => this.play(demo), delay));
+      this._timers.push(this._schedule(() => this.play(demo), delay));
     }
   }
 }
@@ -300,23 +308,67 @@ export const GENERATORS = {
   },
 
   /**
-   * Static mountain: panels settle into a cone of heights — tallest at the field
-   * center, sloping down to the edges — then hold. No animation after arrival.
+   * Static mountain: a parabolic DOME of heights — highest at the center cell, falling off to
+   * the ground at the walls. Each panel's height is set by its position BETWEEN the grounded
+   * walls and the center (climb = dWall / (dWall + dCenter)), so the rise is consistent from
+   * every wall regardless of how off-centre the peak is. `groundWalls` pins named exterior
+   * walls flat to `base`; the 'n' wall is the whole north row (h AND v panels).
+   * @param params.peak        center height, position 0..255 (default 128 ≈ z=4)
+   * @param params.base        wall/ground height, position 0..255 (default 0)
+   * @param params.centerX/Y   center cell (default: field centroid)
+   * @param params.groundWalls exterior walls to pin to base: any of 'n','w','e','s'
+   * @param params.brightness  light level 0..1 for every panel (default null = keep)
    */
   mountain(engine, params) {
-    const peak = params.peak ?? 255;
-    const base = params.base ?? 30;
+    const peak = params.peak ?? 128;
+    const base = params.base ?? 0;
+    const bright = params.brightness ?? null;
+    const ground = new Set(params.groundWalls ?? []);
 
     const cells = cellsOf(engine);
-    const cx = cells.reduce((s, c) => s + c.x, 0) / cells.length;
-    const cy = cells.reduce((s, c) => s + c.y, 0) / cells.length;
-    // Normalize distance by the farthest cell so the outermost ring sits at `base`.
-    const maxD = Math.max(1, ...cells.map((c) => Math.hypot(c.x - cx, c.y - cy)));
+    const panels = engine.list();
+    const xs = cells.map((c) => c.x), ys = cells.map((c) => c.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    // Easternmost vertical wall per row, and the last full-width row (E silhouette, as in geo).
+    const maxVxByRow = new Map();
+    for (const p of panels) if (p.orient === 'v') maxVxByRow.set(p.y, Math.max(maxVxByRow.get(p.y) ?? -Infinity, p.x));
+    const maxFullWidthRow = Math.max(...cells.filter((c) => c.x === maxX).map((c) => c.y));
 
-    return engine.list().map((p) => {
-      const t = Math.hypot(p.x - cx, p.y - cy) / maxD; // 0 center .. 1 edge
-      const pos = Math.round(base + (peak - base) * (1 - t));
-      return { t: 0, run: () => engine.move(p.x, p.y, p.orient, pos) }; // move to the cone height, keep light
+    // Exterior wall silhouette (index-based, h=south / v=east convention). 'n' = the whole
+    // north row (both h and v panels); 'w'/'e' the left/right vertical edges; 's' the south row.
+    const isGroundWall = (p) =>
+      (ground.has('n') && p.y === minY) ||
+      (ground.has('w') && p.orient === 'v' && p.x === minX) ||
+      (ground.has('e') && p.orient === 'v' && p.x === maxVxByRow.get(p.y) && p.y <= maxFullWidthRow) ||
+      (ground.has('s') && p.orient === 'h' && p.y === maxY);
+
+    const cx = params.centerX ?? (cells.reduce((s, c) => s + c.x, 0) / cells.length);
+    const cy = params.centerY ?? (cells.reduce((s, c) => s + c.y, 0) / cells.length);
+    const ccx = cx + 0.5, ccy = cy + 0.5; // cell center
+    const ptOf = (p) => panelCenter(p.x, p.y, p.orient);
+    const wallPts = panels.filter(isGroundWall).map(ptOf);
+    const maxD = Math.max(1, ...panels.map((p) => { const { px, py } = ptOf(p); return Math.hypot(px - ccx, py - ccy); }));
+
+    return panels.map((p) => {
+      let pos;
+      if (isGroundWall(p)) {
+        pos = base;                                            // named exterior walls flat on the ground
+      } else {
+        const { px, py } = ptOf(p);
+        const dCenter = Math.hypot(px - ccx, py - ccy);
+        // Consistent climb: normalise by THIS panel's distance to the nearest grounded wall, so
+        // the rise from wall (0) to centre (peak) is even in every direction. Fall back to the
+        // farthest-panel radius when no walls are grounded.
+        let t;
+        if (wallPts.length) {
+          const dWall = Math.min(...wallPts.map((w) => Math.hypot(px - w.px, py - w.py)));
+          t = 1 - dWall / (dWall + dCenter);                   // 0 at centre .. 1 at a wall
+        } else {
+          t = Math.min(1, dCenter / maxD);
+        }
+        pos = Math.round(base + (peak - base) * (1 - t * t));  // parabolic dome
+      }
+      return { t: 0, run: () => engine.move(p.x, p.y, p.orient, pos, bright) };
     });
   },
 
@@ -431,8 +483,9 @@ export const GENERATORS = {
    * wins a contested wall: we emit ALL deactivations before ALL activations so an
    * activation fires LAST at any equal-timestamp handoff and wins (last-writer).
    *
-   * Range is limited to [top .. mid-room-height]: an activated block drops only to the
-   * world height equal to half the room's height, not to the floor.
+   * Range is [top .. mid-room]: an activated block drops only to half the room's height, not
+   * the floor (override via downPos). The optional `rim` is the exception — it travels the
+   * FULL range (floor ↔ top) with block 1 (see below).
    *
    * Only START times are scheduled; travel is always at the global speed. The range
    * travel time (used to place the schedule) is measured from the current speed.
@@ -443,11 +496,11 @@ export const GENERATORS = {
    * @param params.deactivationDelay  ms; activation end -> deactivation begin (default 0)
    * @param params.activationDelay    ms; activation end -> next activation begin (default 0)
    * @param params.cycles   times to run through all blocks (default 4)
+   * @param params.rim      truthy → the E wall + SE diagonal rim moves with block 1
    */
   'blocks-descending'(engine, params) {
     const groups = params.groups || [];
-    // Limit the motion range to [top .. mid-room]: an activated block drops only to the
-    // panel position whose world height is half the room height (inverse of Grid.heightFor).
+    // Blocks descend to the mid-room height (inverse of Grid.heightFor) and rise back to the top.
     const room = engine.config.room;
     const m = engine.config.motion;
     const posForHeight = (yWorld) => {
@@ -476,6 +529,20 @@ export const GENERATORS = {
       }
       return panels;
     });
+
+    // Optional rim (E wall + SE diagonal) that MOVES WITH block 1 but travels the FULL range —
+    // all the way DOWN to the floor and all the way UP — while the blocks keep their own range.
+    // The rim owns its panels: remove them from every block so nothing double-drives them; it's
+    // swept separately in the schedule below, at block 1's activate/deactivate times.
+    const rimIdx = params.rim ? Math.max(0, groups.findIndex((g) => g.block === '1')) : -1;
+    let rimPanels = [];
+    if (params.rim && blockPanels.length) {
+      rimPanels = seRimPanels(engine.list()).filter((e) => engine.get(e.x, e.y, e.orient));
+      const rimKeys = new Set(rimPanels.map((e) => `${e.x},${e.y},${e.orient}`));
+      for (let i = 0; i < blockPanels.length; i++) {
+        blockPanels[i] = blockPanels[i].filter((e) => !rimKeys.has(`${e.x},${e.y},${e.orient}`));
+      }
+    }
 
     // Full-range travel time at the global speed — used only to place the schedule.
     const rate = engine.speed * (1 - engine.ease);
@@ -550,6 +617,13 @@ export const GENERATORS = {
       const handoff = sharedBetween(cur, next);
       if (handoff.length) {
         actions.push({ t: deactStart(s) + stealAfter, run: sweep(handoff, downPos, LIT) });
+      }
+
+      // The rim moves WITH block 1 but travels the FULL range (floor ↔ top), independent of
+      // the blocks' mid-room range. Sweep it down/up on block 1's own activate/deactivate.
+      if (cur === rimIdx && rimPanels.length) {
+        actions.push({ t: actStart[s], run: sweep(rimPanels, 0, LIT) });      // all the way down, lit
+        actions.push({ t: deactStart(s), run: sweep(rimPanels, 255, DARK) }); // all the way up, dark
       }
     }
     return actions;

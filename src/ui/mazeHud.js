@@ -85,7 +85,8 @@ export class MazeHud {
     // scene. The 3D sim always mirrors tracked belief — with the movement→state inversion the
     // sim is a READOUT of the physical maze, not something the demos paint, so there is no
     // longer anything to toggle: this.tick() drives the sim to belief every frame.
-    this.selectedNote = null;
+    this.selected = new Set();   // notes currently selected (multiselect); Move/Fix affect all
+    this.primaryNote = null;     // last-selected note — drives the card's info + zv defaults
     this._lastMirroredPos = new Map();  // note -> last sim position we drove (change-detect)
     this._fastReset = new Set();        // notes whose NEXT mirror drive is a belief-only
                                         // reset (Fix / Reset-at-0) → glide at 10x, not real
@@ -147,12 +148,15 @@ export class MazeHud {
     const zeroBtn = mkBtn('Fix to 0', () => this.resetAtZero());
     zeroBtn.classList.add('danger');
     zeroBtn.title = 'Assume every panel is home and dark: fix tracked belief to 0+, lights off (no MIDI, no movement)';
+    const midBtn = mkBtn('Fix to 4', () => this.resetAtFour());
+    midBtn.classList.add('danger');
+    midBtn.title = 'Assume every panel is at mid and dark: fix tracked belief to 4+, lights off (no MIDI, no movement)';
     const topBtn = mkBtn('Fix to 8-', () => this.resetAtTop());
     topBtn.classList.add('danger');
     topBtn.title = 'Assume every panel is at the top and dark: fix tracked belief to 8-, lights off (no MIDI, no movement)';
     const panicBtn = mkBtn('panic', () => { if (this.midi.enabled) this.midi.panic(); });
     panicBtn.title = 'All lights off (no movement)';
-    g1.append(stepAllBtn, zeroBtn, topBtn, panicBtn);
+    g1.append(stepAllBtn, zeroBtn, midBtn, topBtn, panicBtn);
 
     const g2 = document.createElement('div');
     g2.className = 'row';
@@ -177,6 +181,14 @@ export class MazeHud {
     this._ctx = this._canvas.getContext('2d');
     this._canvas.addEventListener('click', (e) => this._onCanvasClick(e));
 
+    // Selection controls (multiselect: click panels to toggle; Move/Fix affect all selected).
+    const gSel = document.createElement('div');
+    gSel.className = 'row';
+    gSel.append(
+      mkBtn('Select all', () => this.selectAll()),
+      mkBtn('Clear', () => this.clearSelection()),
+    );
+
     // Selected-panel control card.
     this._card = document.createElement('div');
     this._card.className = 'maze-hud-card';
@@ -184,11 +196,11 @@ export class MazeHud {
     const hint = document.createElement('div');
     hint.className = 'hint';
     hint.textContent =
-      '2D + virtual view of tracked belief. Click a panel to select. Move = send MIDI + ' +
-      'update belief (real movement); Fix = correct belief only, no MIDI. The 3D maze ' +
-      'mirrors this tracked state.';
+      '2D + virtual view of tracked belief. Click panels to select (toggle) — Move/Fix affect ' +
+      'ALL selected. Move = send MIDI + update belief (real movement); Fix = correct belief ' +
+      'only, no MIDI. The 3D maze mirrors this tracked state.';
 
-    container.append(head, g1, g2, this._canvas, this._card, hint);
+    container.append(head, g1, g2, this._canvas, gSel, this._card, hint);
     this._refreshCard();
   }
 
@@ -201,7 +213,7 @@ export class MazeHud {
       const chip = document.createElement('button');
       chip.className = 'maze-chip';
       chip.dataset.note = p.note;
-      chip.addEventListener('click', () => this.selectNote(p.note));
+      chip.addEventListener('click', () => this.toggleNote(p.note));
       layer.appendChild(chip);
       this._chips.set(p.note, chip);
     }
@@ -234,51 +246,81 @@ export class MazeHud {
   _styleChip(chip, p) {
     chip.textContent = `${p.note} ${normZv(p.z, p.v).v === 1 ? '↑' : '↓'}${p.z}`;
     chip.classList.toggle('dead', p.dead);
-    chip.classList.toggle('sel', p.note === this.selectedNote);
+    const sel = this.selected.has(p.note);
+    chip.classList.toggle('sel', sel);
     const on = p.brightness > 0;
-    chip.style.borderColor = p.note === this.selectedNote ? 'var(--accent)'
+    chip.style.borderColor = sel ? 'var(--accent)'
       : on ? 'rgba(255,214,140,0.9)' : 'var(--border)';
   }
 
   // ---- selection + card ------------------------------------------------------
 
-  selectNote(note) {
-    this.selectedNote = note;
+  /** Toggle a panel in/out of the selection (click behavior). Tracks the last-added as primary. */
+  toggleNote(note) {
+    if (this.selected.has(note)) {
+      this.selected.delete(note);
+      if (this.primaryNote === note) this.primaryNote = [...this.selected].pop() ?? null;
+    } else {
+      this.selected.add(note);
+      this.primaryNote = note;
+    }
+    this._refreshCard();
+  }
+
+  /** Select every panel. */
+  selectAll() {
+    this.selected = new Set(this.state.list().map((p) => p.note));
+    this.primaryNote = [...this.selected].pop() ?? null;
+    this._refreshCard();
+  }
+
+  /** Clear the selection. */
+  clearSelection() {
+    this.selected.clear();
+    this.primaryNote = null;
     this._refreshCard();
   }
 
   _refreshCard() {
     const card = this._card;
     card.textContent = '';
-    const p = this.selectedNote != null ? this.state.get(this.selectedNote) : null;
-    if (!p) {
+    const count = this.selected.size;
+    if (count === 0) {
       const empty = document.createElement('div');
       empty.className = 'hint'; empty.style.margin = '0';
-      empty.textContent = 'No panel selected — click one above.';
+      empty.textContent = 'No panel selected — click panels to select (toggle), or “Select all”.';
       card.append(empty);
       return;
     }
+    // The primary (last-selected) panel drives the info line + the zv defaults; the actions
+    // below apply to EVERY selected panel.
+    const p = this.state.get(this.primaryNote) ?? this.state.get([...this.selected][0]);
 
     // A plain block so the inline text + <b> values flow naturally. (Using the flex
     // `.row` class here shatters the sentence into gap-spaced items — the layout bug.)
-    // Each segment is a nowrap unit, so the line wraps only at the `·` separators —
-    // (z,v) never splits across lines.
     const arrow = normZv(p.z, p.v).v === 1 ? '↑' : '↓';
     const title = document.createElement('div');
     title.className = 'hud-card-title';
-    title.innerHTML =
-      `<span class="nw"><b>${p.name}</b></span> · <span class="nw">note ${p.note}</span> · ` +
-      `<span class="nw">(${p.x},${p.y},${p.orient})</span> · ` +
-      `<span class="nw">(z,v)=<b>(${p.z},${arrow})</b></span>` +
-      (p.dead ? ' · <span class="nw" style="color:#e07a7a">DEAD</span>' : '') +
-      (p.brightness > 0 ? ` · <span class="nw">light ${p.brightness}</span>` : '');
+    if (count > 1) {
+      title.innerHTML =
+        `<span class="nw"><b>${count} panels</b> selected — Move/Fix affect all</span> · ` +
+        `<span class="nw">primary <b>${p.name}</b> (${p.x},${p.y},${p.orient})</span> · ` +
+        `<span class="nw">(z,v)=<b>(${p.z},${arrow})</b></span>`;
+    } else {
+      title.innerHTML =
+        `<span class="nw"><b>${p.name}</b></span> · <span class="nw">note ${p.note}</span> · ` +
+        `<span class="nw">(${p.x},${p.y},${p.orient})</span> · ` +
+        `<span class="nw">(z,v)=<b>(${p.z},${arrow})</b></span>` +
+        (p.dead ? ' · <span class="nw" style="color:#e07a7a">DEAD</span>' : '') +
+        (p.brightness > 0 ? ` · <span class="nw">light ${p.brightness}</span>` : '');
+    }
     card.append(title);
 
     const acts = document.createElement('div');
     acts.className = 'row';
     acts.append(
-      mkBtn('step ×1', () => this._step(p.note)),
-      mkBtn(p.dead ? 'revive' : 'mark dead', () => this._toggleDead(p.note)),
+      mkBtn('step ×1', () => this._stepSelected()),
+      mkBtn(p.dead ? 'revive' : 'mark dead', () => this._toggleDeadSelected()),
     );
     card.append(acts);
 
@@ -323,15 +365,11 @@ export class MazeHud {
     };
 
     card.append(
-      // Move — real movement: walk to (z,v), SEND midi, commit tracked state.
-      zvRow('Move', false, (z, v) => this._moveTo(p.note, z, v)),
-      // Fix — belief correction: set tracked (z,v) only, NO midi. The real panel doesn't
-      // move, so the 3D mirror snaps there fast (it's a reset, not a movement).
-      zvRow('Fix', true, (z, v) => {
-        this.state.commit(p.note, normZv(z, v), p.brightness);
-        this._fastReset.add(p.note);
-        this._afterChange();
-      }),
+      // Move — real movement (all selected): walk to (z,v), SEND midi, commit tracked state.
+      zvRow('Move', false, (z, v) => this._moveSelected(z, v)),
+      // Fix — belief correction (all selected): set tracked (z,v) only, NO midi. The real panels
+      // don't move, so the 3D mirror snaps there fast (it's a reset, not a movement).
+      zvRow('Fix', true, (z, v) => this._fixSelected(z, v)),
     );
 
     if (this.midi.logging) card.append(this._logEl(p.note));
@@ -391,7 +429,6 @@ export class MazeHud {
       this.midi.sendSteps(new Map([[note, { steps, vel }]]));
     }
     this.state.commit(note, newState, p.brightness);
-    this._afterChange();
   }
 
   _step(note) {
@@ -400,20 +437,45 @@ export class MazeHud {
     const vel = Math.max(1, p.brightness || 1);
     if (this._guard()) this.midi.sendSteps(new Map([[note, { steps: 1, vel }]]));
     this.state.stepOne(note);
+  }
+
+  // ---- selection-wide actions (Move / Fix / step / dead affect every selected panel) --------
+
+  /** Real movement of every selected panel to (z,v): SEND midi + commit belief. */
+  _moveSelected(z, v) {
+    for (const note of this.selected) this._moveTo(note, z, v);
     this._afterChange();
   }
 
-  _toggleDead(note) {
-    const p = this.state.get(note);
-    if (!p) return;
-    this.state.setDead(note, !p.dead);
+  /** Belief correction of every selected panel to (z,v): NO midi (fast 3D reset). */
+  _fixSelected(z, v) {
+    for (const note of this.selected) {
+      const p = this.state.get(note);
+      if (!p) continue;
+      this.state.commit(note, normZv(z, v), p.brightness);
+      this._fastReset.add(note);
+    }
+    this._afterChange();
+  }
+
+  /** Send one step to every selected panel, advancing belief. */
+  _stepSelected() {
+    for (const note of this.selected) this._step(note);
+    this._afterChange();
+  }
+
+  /** Mark every selected panel dead/alive (target = opposite of the primary's state). */
+  _toggleDeadSelected() {
+    const prim = this.state.get(this.primaryNote);
+    const target = prim ? !prim.dead : true;
+    for (const note of this.selected) this.state.setDead(note, target);
     this._syncDead();
     this._afterChange();
   }
 
   _afterChange() {
     this._refreshCard();
-    this._lastMirroredPos.delete(this.selectedNote); // re-drive this panel next tick
+    for (const note of this.selected) this._lastMirroredPos.delete(note); // re-drive changed panels
   }
 
   // ---- scene / reset ---------------------------------------------------------
@@ -452,6 +514,21 @@ export class MazeHud {
   }
 
   /**
+   * Assume every panel is at mid at 4+ (z=4, v=+1) with its light OFF: fix tracked belief only,
+   * NO midi — a bulk "Fix" (a neutral mid pose, e.g. the Diagonal's unlit rest height).
+   * Nothing physically moves; the 3D mirror glides there fast + dark.
+   */
+  resetAtFour() {
+    for (const p of this.state.list()) {
+      if (p.dead) continue;
+      this.state.commit(p.note, { z: 4, v: 1 }, 0);
+      this._fastReset.add(p.note);
+    }
+    this._lastMirroredPos.clear();
+    this._refreshCard();
+  }
+
+  /**
    * Assume every panel is at the top at 8- (z=N, v=-1) with its light OFF: fix tracked belief
    * only, NO midi — a bulk "Fix" (the natural post-arrival state at the top, ready to descend).
    * Nothing physically moves; the 3D mirror glides up fast + dark.
@@ -481,8 +558,7 @@ export class MazeHud {
     this._syncDead();
     for (const p of this.state.list()) this._fastReset.add(p.note);
     this._lastMirroredPos.clear();
-    this.selectedNote = null;
-    this._refreshCard();
+    this.clearSelection();
   }
 
   // ---- export / import -------------------------------------------------------
@@ -558,7 +634,7 @@ export class MazeHud {
       if (p.dead) { stroke('#332', 4); continue; }
       stroke(`rgb(${shade},${shade + 6},${shade + 14})`, 4);
       if (p.brightness > 0) stroke(`rgba(255,214,140,${Math.min(1, p.brightness / 127)})`, 5);
-      if (p.note === this.selectedNote) stroke('#6ea8ff', 2);
+      if (this.selected.has(p.note)) stroke('#6ea8ff', 2);
       // direction arrow at the midpoint
       ctx.fillStyle = '#9aa4b2';
       ctx.fillText(normZv(p.z, p.v).v === 1 ? '▲' : '▼', (seg.x0 + seg.x1) / 2, (seg.y0 + seg.y1) / 2);
@@ -585,7 +661,7 @@ export class MazeHud {
       const d = (mx - px) ** 2 + (my - py) ** 2;
       if (d < bestD) { bestD = d; best = p.note; }
     }
-    if (best != null) this.selectNote(best);
+    if (best != null) this.toggleNote(best);
   }
 }
 

@@ -68,6 +68,10 @@ export class MazeMidiController {
     this.log = new Map();      // note -> [{ t, on, vel }] (most-recent last)
     this._logCap = 400;        // messages kept per note
 
+    // Optional "stop everything" callback invoked at the start of panic() — wired by main.js
+    // to halt all movements (timeline + controllers + auto-cycle) so nothing re-drives after.
+    this.onPanic = null;
+
     // Hard guard: notes here are never sent (belt-and-suspenders with the HUD's own
     // dead filter). The HUD keeps this in sync with tracked `dead` panels.
     this.deadNotes = new Set();
@@ -260,6 +264,10 @@ export class MazeMidiController {
     if (arr.length > this._logCap) arr.splice(0, arr.length - this._logCap);
   }
 
+  /** Drop everything queued and stop the pump (e.g. on Stop / switching movements). Already-
+   *  dispatched messages can't be unsent, but no further queued movement reaches the wire. */
+  flush() { this._cancel(); }
+
   /** Recorded messages for a note (most-recent last), or an empty array. */
   logFor(note) { return this.log.get(note) || []; }
 
@@ -275,8 +283,10 @@ export class MazeMidiController {
     this._draining = false;
   }
 
-  /** Kill every light: one note-off (0x80) per note 0–127. No movement. */
+  /** Kill every light: one note-off (0x80) per note 0–127. No movement. First stops all
+   *  movements (via onPanic) so nothing re-drives the maze right after. */
   panic() {
+    if (this.onPanic) { try { this.onPanic(); } catch (e) { console.error(e); } }
     this._cancel();                                // stop any in-flight move
     const out = this._output();
     if (!out) { this._setStatus('no MIDI output selected', false); return false; }

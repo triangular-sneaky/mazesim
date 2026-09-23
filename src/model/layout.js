@@ -45,3 +45,24 @@ export const cellEdgeList = (x, y) => {
 
 /** Key string for a panel address, matching the "x,y,orient" convention used across the app. */
 export const edgeKey = ({ x, y, orient }) => `${x},${y},${orient}`;
+
+/**
+ * The field's SE "rim": the EAST wall (easternmost vertical wall of each full-width row) plus the
+ * SE staircase's OUTER STEPPED EDGE (south-facing h walls + the staircase's east-facing v walls).
+ * This is the same silhouette the Flowie "Diagonal" lights on its E/SE side. Given the live panel
+ * list, returns the rim panels as {x,y,orient} addresses.
+ */
+export function seRimPanels(panels) {
+  const occupied = new Set(panels.map((p) => `${p.x},${p.y}`));
+  const has = (x, y) => occupied.has(`${x},${y}`);
+  const maxX = Math.max(...panels.map((p) => p.x));
+  const maxVxByRow = new Map();
+  for (const p of panels) if (p.orient === 'v') maxVxByRow.set(p.y, Math.max(maxVxByRow.get(p.y) ?? -Infinity, p.x));
+  const maxFullWidthRow = Math.max(...panels.filter((p) => p.x === maxX).map((p) => p.y));
+  const isSouth = (p) => p.orient === 'h' && has(p.x, p.y) && !has(p.x, p.y + 1);
+  const isEast = (p) => p.orient === 'v' && has(p.x, p.y) && !has(p.x + 1, p.y);
+  const isEwall = (p) => p.orient === 'v' && p.x === maxVxByRow.get(p.y) && p.y <= maxFullWidthRow;
+  return panels
+    .filter((p) => isEwall(p) || isSouth(p) || (isEast(p) && p.y > maxFullWidthRow))
+    .map((p) => ({ x: p.x, y: p.y, orient: p.orient }));
+}

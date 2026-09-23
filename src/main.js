@@ -15,6 +15,7 @@ import { MidiMode } from './ui/midiMode.js';
 import { MazeMidiController } from './ui/mazeMidiController.js';
 import { VideoMode } from './ui/videoMode.js';
 import { DemoPlayer } from './demos/player.js';
+import { BackgroundClock } from './ui/backgroundClock.js';
 import { setupDetach } from './ui/detach.js';
 import { startAutoReload } from './ui/autoReload.js';
 
@@ -109,6 +110,7 @@ function main() {
   const loopDemos = loops.map((lp) => ({
     id: lp.id, name: lp.name, desc: lp.desc, group: 'Loops',
     generator: lp.generator, params: { groups: lp.groups, ...lp.params },
+    uiParams: lp.uiParams,
   }));
   if (loopDemos.length) {
     const lastChase = [...demos].map((d, i) => d.group === 'Chase' ? i : -1).filter((i) => i >= 0).pop();
@@ -119,10 +121,25 @@ function main() {
   try {
   const grid = new Grid(config);
 
+  // Background-safe clock: drives the control path (movement ticks + MIDI pacing) from the
+  // audio thread so it keeps running when the tab is hidden (rAF pauses / timers throttle).
+  const clock = new BackgroundClock();
+  const clockTimers = {
+    schedule: (fn, ms) => clock.setTimeout(fn, ms),
+    unschedule: (id) => clock.clearTimeout(id),
+  };
+  // Unlock the audio heartbeat on the first user gesture (autoplay policy), and re-check when
+  // the tab becomes visible again.
+  const unlockClock = () => clock.resume();
+  ['pointerdown', 'keydown', 'touchstart'].forEach((ev) =>
+    window.addEventListener(ev, unlockClock, { once: true }));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) clock.resume(); });
+
   // Transport + tracked belief must exist BEFORE the engine: the engine is state-backed —
   // every movement drives belief -> MIDI -> mirror to 3D — so it needs both. (midiMap was
-  // loaded up top; it also drives the engine's panel set.)
-  const mazeMidi = new MazeMidiController();
+  // loaded up top; it also drives the engine's panel set.) The transport paces through the
+  // background clock so MIDI keeps flowing in a hidden tab.
+  const mazeMidi = new MazeMidiController({ ...(config.midi || {}), ...clockTimers });
   const mazeState = new MazeState(midiMap.byNote);
   const engine = new MazeEngine(config, panels, { state: mazeState, midi: mazeMidi });
 
@@ -159,8 +176,8 @@ function main() {
     });
   });
 
-  // Demos
-  const player = new DemoPlayer(engine);
+  // Demos — scheduled on the background clock so timeline movements keep firing when hidden.
+  const player = new DemoPlayer(engine, clockTimers);
 
   // Auto-cycle: play a sequence of wave/ripple demos on a repeating timer, advancing
   // every CYCLE_INTERVAL ms and looping back to the start. Runs on load until the user
@@ -201,7 +218,7 @@ function main() {
     viewport, cells, meshes,
   });
 
-  new DemoBank(document.getElementById('demo-list'), demos, player, {
+  const demoBank = new DemoBank(document.getElementById('demo-list'), demos, player, {
     onManual: stopCycle,
     onCycle: startCycle,
     searchEl: document.getElementById('move-search'),
@@ -209,6 +226,10 @@ function main() {
     engine,
     collapseAll: true, // all groups start collapsed; user expands as needed
   });
+
+  // Panic (either panic button routes through mazeMidi.panic) stops ALL movements first —
+  // the timeline player, any interactive controller, and the auto-cycle — then kills lights.
+  mazeMidi.onPanic = () => { stopCycle(); demoBank.stopAll(); };
   // On load we do NOT auto-play a movement: the sim now mirrors tracked belief (persisted or
   // neutral), and playing "all up" would drive the real maze (state -> MIDI) on every reload.
   // The demo cycle is still available via the "Cycle demos" button.
@@ -275,23 +296,25 @@ function main() {
   // Fold/unfold sidebar sections (state persisted). Run after every section is mounted.
   setupCollapsibleSections();
 
-  // Animation loop
-  let last = performance.now();
-  function frame(now) {
-    const dt = Math.min((now - last) / 1000, 0.1); // clamp big gaps
-    last = now;
-    engine.tick(dt);
-    prison.tick(dt);       // drives caged panels directly; no-op unless its controls are open
-    lullabyFloat.tick(dt); // brightness only — reads actual panel positions; no-op when inactive
+  // CONTROL loop — the state simulation + anything that generates MIDI. Runs on the
+  // background-safe clock so it keeps advancing (and sending) when the tab is hidden.
+  clock.onTick((dt) => {
+    engine.tick(dt);       // advance panel motion (positions the movements read back)
+    prison.tick(dt);       // drives caged panels; no-op unless its controls are open
+    lullabyFloat.tick(dt); // elastic follow; no-op when inactive
     midi.tick(dt);         // re-asserts held brightness; mutes movement LEDs when mute is on
-    mazeHud.tick(dt);      // mirror tracked belief onto the sim (always on: sim = physical belief)
+    mazeHud.tick(dt);      // mirror tracked belief onto the sim (sim = physical belief)
+  });
+
+  // RENDER loop — drawing only. rAF naturally pauses when the tab is hidden; nothing to draw.
+  function frame() {
     meshes.sync();
     gridMap.draw();
     cellBoard.draw();
-    mazeHud.draw();        // 2D belief canvas (always live)
+    mazeHud.draw();          // 2D belief canvas
     controls.refresh();
     view.render();
-    mazeHud.updateOverlay(); // reposition virtual chips against the fresh camera (always live)
+    mazeHud.updateOverlay(); // reposition virtual chips against the fresh camera
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

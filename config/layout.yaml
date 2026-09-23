@@ -49,6 +49,13 @@ blink:
   sustain: 0.15     # s, hold at peak
   decay: 0.40       # s, peak -> 0
 
+# MIDI-out transport guards (the non-negotiable rate limiter). Editable live in the MIDI
+# section, but these are the load-time defaults the maze controller boots with.
+midi:
+  rateHz: 100       # token-bucket sustained ceiling (messages/sec)
+  burst: 32         # token-bucket capacity (max messages in a burst before throttling)
+  delayMs: 6        # wire gap between consecutive messages (ms)
+
 # Occupied-cell matrix. Row 0 = north (back), column 0 = west (left).
 # Any non-space, non-'.' char = occupied. '.' or space = empty.
 # Rows may be shorter than the widest row; missing trailing cells are empty.

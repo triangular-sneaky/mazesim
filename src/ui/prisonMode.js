@@ -1,22 +1,23 @@
 /**
- * "Prison" interlude — an interactive movement (not a timeline). A maze-cell board:
- * click an occupied cell and its 4 framing panels (the cell's N/S/E/W edges) drop to
- * the ground, caging whoever stands there, then bob between ground and ~1 m while
- * pulsing (biased toward on). Click another cell and the previous cage dims and rises
- * as the new one forms. Exactly one cell is caged at a time.
+ * "Prison" interlude — an interactive movement (not a timeline). A maze-cell board plus a
+ * cell text box and Up / Down buttons. NOTHING moves on activation:
+ *   - Click a cell (or type "x,y") → it just populates the text box (the selection).
+ *   - Up   → the selected cell's 4 edges rise to z=4, lit; every other panel goes up and dark.
+ *   - Down → the classic cage bob begins from wherever the cell is now: it drops and then
+ *            ping-pongs between the ground and ~1 m, pulsing red, until you press Up / reselect.
  *
- * Implements the controller contract used by DemoBank's collapsible controls:
+ * Controller contract used by DemoBank's collapsible controls:
  *   .el              — root DOM element to mount
- *   .setActive(on)   — start/stop the interactive mode (idempotent)
- *   .tick(dt)        — advance per frame (call from the main animation loop)
+ *   .setActive(on)   — start/stop the interactive mode (idempotent; start does NOT move)
+ *   .tick(dt)        — advance per frame
  *
- * All panel motion — the drop, the bob, the release — goes through the engine's combined
- * sweep at the GLOBAL speed (no velocity override), carrying the cage light with the move;
- * the bob ping-pongs between ground and ~1 m,
- * flipping target each time the panels arrive, so its amplitude is fixed while its period
- * follows the global speed. Only LED brightness (the glow) is driven directly here.
+ * All panel motion goes through the engine's combined move/sweep at the GLOBAL speed (no
+ * velocity override), carrying the light with the move; the bob flips target on arrival so its
+ * amplitude is fixed while its period follows the global speed. The red glow pulse is an LED
+ * effect driven directly onto the board.
  */
 import { cellEdgeList } from '../model/layout.js';
+import { zToPos } from '../model/mazeState.js';
 
 export class PrisonMode {
   constructor(engine, cells, config) {
@@ -32,25 +33,34 @@ export class PrisonMode {
       Math.max(0, Math.min(255, ((hM - m.travelMin) / (m.travelMax - m.travelMin)) * 255));
     this.groundPos = 0;
     this.highPos = posForHeight(1.0);   // top of the bob (~1 m)
+    this.cagePos = zToPos(4);           // "Up" cage height = z=4
     this.releasePos = m.restPosition ?? 255;
 
-    // Timing / feel. NOTE: panel travel speed is NOT set here — it always uses the global
-    // engine speed. Only the glow (an LED effect, not motion) keeps its own timer.
+    // Timing / feel. Panel travel speed is always the global engine speed; only the glow keeps
+    // its own timer.
     this.glowPeriod = 0.9;   // s per glow pulse
     this.releaseFade = 0.5;  // s to dim a released cage
-    this.peak = 0.95;        // glow brightness ceiling
-    this.bobDwell = 0.2;     // s to hold at each end of the bob before reversing
+    this.peak = 0.95;        // glow / lit brightness ceiling
+
+    // Down-bob params (operator-editable below).
+    this.oscillations = 0;   // total up-down cycles before holding at the ground (0 = endless)
+    this.bottomDwell = 0.2;  // s held at the ground before rising
+    this.topDwell = 0.2;     // s held at the top before dropping
 
     // State.
     this._active = false;
-    this.trapCell = null;    // {x,y}
-    this.trapPanels = [];    // Panel refs currently caged
+    this._selected = null;   // {x,y} chosen on the board / text box (no movement)
+    this._bobbing = false;   // true only while the Down bob is running
+    this._osc = 0;           // completed oscillations this run
+    this._hasRisen = false;  // has the cage gone up at least once (so the initial drop isn't counted)
+    this.trapCell = null;    // {x,y} currently actioned (Up or Down)
+    this.trapPanels = [];    // Panel refs of the actioned cell's 4 edges
     this.bobTarget = null;   // current ping-pong target for the caged panels
-    this._dwell = 0;         // seconds held at the current bob end (before reversing)
+    this._dwell = 0;         // seconds held at the current bob end
     this.glowPhase = 0;      // seconds accumulated for the glow pulse
     this.releasing = new Map(); // panel.key -> { panel, b } fading brightness on release
 
-    // DOM: a canvas board + a hint.
+    // DOM: board canvas + a cell text box + Up/Down buttons + hint.
     this.el = document.createElement('div');
     const canvas = document.createElement('canvas');
     canvas.className = 'prison-board';
@@ -58,10 +68,57 @@ export class PrisonMode {
     canvas.width = this.cols * this.cell + this.pad * 2;
     canvas.height = this.rows * this.cell + this.pad * 2;
     canvas.addEventListener('click', (e) => this._onClick(e));
+
+    const selRow = document.createElement('div');
+    selRow.className = 'row';
+    const lbl = document.createElement('label');
+    lbl.textContent = 'cell';
+    this._cellInput = document.createElement('input');
+    this._cellInput.type = 'text';
+    this._cellInput.className = 'val';
+    this._cellInput.style.width = '60px';
+    this._cellInput.placeholder = 'x,y';
+    this._cellInput.addEventListener('input', () => { this._selected = this._parseCell(); this._draw(); });
+    selRow.append(lbl, this._cellInput);
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'row';
+    const upBtn = document.createElement('button');
+    upBtn.textContent = 'Up';
+    upBtn.title = 'Selected cell to z=4 (lit); every other panel up and dark';
+    upBtn.addEventListener('click', () => this._up());
+    const downBtn = document.createElement('button');
+    downBtn.textContent = 'Down';
+    downBtn.title = 'Drop the selected cell and start the bob from where it is';
+    downBtn.addEventListener('click', () => this._down());
+    btnRow.append(upBtn, downBtn);
+
+    // Down-bob params: total oscillations (0 = endless) + dwell at each end.
+    const numRow = (label, get, set, min, max, step) => {
+      const r = document.createElement('div');
+      r.className = 'row';
+      const l = document.createElement('label');
+      l.textContent = label;
+      const i = document.createElement('input');
+      i.type = 'number'; i.className = 'val'; i.style.width = '56px';
+      i.min = min; i.max = max; i.step = step; i.value = get();
+      i.addEventListener('change', () => {
+        const v = Math.max(min, Math.min(max, Number(i.value) || 0));
+        i.value = v; set(v);
+      });
+      r.append(l, i);
+      return r;
+    };
+    const oscRow = numRow('oscillations', () => this.oscillations,
+      (v) => { this.oscillations = Math.round(v); }, 0, 99, 1);
+    const botRow = numRow('bottom delay (s)', () => this.bottomDwell, (v) => { this.bottomDwell = v; }, 0, 10, 0.1);
+    const topRow = numRow('top delay (s)', () => this.topDwell, (v) => { this.topDwell = v; }, 0, 10, 0.1);
+
     const hint = document.createElement('div');
     hint.className = 'hint';
-    hint.textContent = 'Click a cell to cage it; click another to move the cage.';
-    this.el.append(canvas, hint);
+    hint.textContent = 'Click a cell (or type x,y) to select — then Up cages it high, Down starts the bob.';
+
+    this.el.append(canvas, selRow, btnRow, oscRow, botRow, topRow, hint);
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
   }
@@ -75,15 +132,18 @@ export class PrisonMode {
   }
 
   setActive(on) {
-    if (on === this._active) return;    // idempotent: don't reset an active cage on re-render
+    if (on === this._active) return;    // idempotent
     this._active = on;
-    if (on) {
-      // Sweep the whole field level to rest: every panel travels at the global speed but
-      // the shorter moves start later, so they all "join in" and level together.
-      this.engine.sweepAll(this.releasePos);
-    } else {
-      this._release();                  // collapsing the controls frees the current cage
-    }
+    if (!on) this._release();           // closing the controls stops the bob and frees the cage
+    // Turning on does NOT move anything — wait for the operator to select and press Up/Down.
+  }
+
+  /** Parse the cell text box ("x,y"), returning {x,y} only if it names an occupied cell. */
+  _parseCell() {
+    const m = /^\s*(\d+)\s*,\s*(\d+)\s*$/.exec(this._cellInput.value);
+    if (!m) return null;
+    const x = +m[1], y = +m[2];
+    return this.occupied.has(`${x},${y}`) ? { x, y } : null;
   }
 
   /** Build a sweep move list sending all currently caged panels to `target`. */
@@ -91,6 +151,7 @@ export class PrisonMode {
     return this.trapPanels.map((p) => ({ x: p.x, y: p.y, orient: p.orient, target }));
   }
 
+  /** Click a cell — selection only, no movement. Populates the text box. */
   _onClick(e) {
     if (!this._active) return;
     const rect = this.canvas.getBoundingClientRect();
@@ -98,29 +159,53 @@ export class PrisonMode {
     const py = (e.clientY - rect.top) * (this.canvas.height / rect.height);
     const x = Math.floor((px - this.pad) / this.cell);
     const y = Math.floor((py - this.pad) / this.cell);
-    if (this.occupied.has(`${x},${y}`)) this.trap(x, y);
+    if (!this.occupied.has(`${x},${y}`)) return;
+    this._selected = { x, y };
+    this._cellInput.value = `${x},${y}`;
+    this._draw();
   }
 
-  /** Cage cell (x,y): release any current cage, then drop this cell's 4 edges to ground. */
-  trap(x, y) {
-    if (this.trapCell && this.trapCell.x === x && this.trapCell.y === y) return;
-    this._release();
-    this.trapCell = { x, y };
-    this.trapPanels = this._edgesOf(x, y);
-    for (const p of this.trapPanels) this.releasing.delete(p.key); // re-caged shared edges
-    this.bobTarget = this.groundPos; // drop in first; the bob flips this on arrival
-    this._dwell = 0;
-    // Sweep the four edges down together (lit) — they arrive as one even from different heights.
-    this.engine.sweepTo(this._moves(this.bobTarget), { brightness: this.peak });
+  /** Up: selected cell's edges rise to z=4 (lit); every other panel goes up and dark. */
+  _up() {
+    const cell = this._selected || this._parseCell();
+    if (!cell) return;
+    this._bobbing = false;
+    this.trapCell = cell;
+    this.trapPanels = this._edgesOf(cell.x, cell.y);
+    for (const p of this.trapPanels) this.releasing.delete(p.key);
+    const cageKeys = new Set(this.trapPanels.map((p) => `${p.x},${p.y},${p.orient}`));
+    // Everything else: up and dark.
+    for (const p of this.engine.list()) {
+      if (!cageKeys.has(`${p.x},${p.y},${p.orient}`)) this.engine.move(p.x, p.y, p.orient, this.releasePos, 0);
+    }
+    // The cage: up to z=4, lit.
+    this.engine.sweepTo(this._moves(this.cagePos), { brightness: this.peak });
     this.glowPhase = 0;
   }
 
-  /** Sweep the current cage back up together (at global speed) and fade its glow. */
+  /** Down: start the classic cage bob from the cell's current position (drops, then bobs). */
+  _down() {
+    const cell = this._selected || this._parseCell();
+    if (!cell) return;
+    this.trapCell = cell;
+    this.trapPanels = this._edgesOf(cell.x, cell.y);
+    for (const p of this.trapPanels) this.releasing.delete(p.key);
+    this.bobTarget = this.groundPos;   // start by going down
+    this._dwell = 0;
+    this.glowPhase = 0;
+    this._osc = 0;
+    this._hasRisen = false;
+    this._bobbing = true;
+    this.engine.sweepTo(this._moves(this.bobTarget), { brightness: this.peak });
+  }
+
+  /** Sweep the current cage back up (dark), fade its glow, and stop the bob. */
   _release() {
     if (this.trapPanels.length) {
       for (const p of this.trapPanels) this.releasing.set(p.key, { panel: p, b: p.brightness });
-      this.engine.sweepTo(this._moves(this.releasePos), { brightness: 0 }); // rise + go dark
+      this.engine.sweepTo(this._moves(this.releasePos), { brightness: 0 });
     }
+    this._bobbing = false;
     this.trapCell = null;
     this.trapPanels = [];
     this.bobTarget = null;
@@ -143,26 +228,34 @@ export class PrisonMode {
 
     if (!this._active) return;
 
-    if (this.trapCell) {
-      // Bob: when all caged panels have arrived, hold briefly (bobDwell) so it doesn't snap
-      // straight back, then flip the target and sweep the other way — at the global speed,
-      // so amplitude is fixed and period tracks speed.
+    // Bob only runs after "Down". "Up" leaves the cage static and lit (no pulse).
+    if (this._bobbing && this.trapCell) {
       if (this.trapPanels.every((p) => !p.moving)) {
+        const atGround = this.bobTarget === this.groundPos;
         this._dwell += dt;
-        if (this._dwell >= this.bobDwell) {
-          this.bobTarget = this.bobTarget === this.groundPos ? this.highPos : this.groundPos;
-          this.engine.sweepTo(this._moves(this.bobTarget), { brightness: this.peak });
+        if (this._dwell >= (atGround ? this.bottomDwell : this.topDwell)) {
           this._dwell = 0;
+          // Count a completed oscillation each time we return to the ground after rising.
+          if (atGround && this._hasRisen) {
+            this._osc += 1;
+            if (this.oscillations > 0 && this._osc >= this.oscillations) {
+              this._bobbing = false; // finished: hold at the ground (still lit)
+            }
+          }
+          if (this._bobbing) {
+            this.bobTarget = atGround ? this.highPos : this.groundPos;
+            if (this.bobTarget === this.highPos) this._hasRisen = true;
+            this.engine.sweepTo(this._moves(this.bobTarget), { brightness: this.peak });
+          }
         }
       }
-
       // Glow (LED, not motion): pulse brightness on its own timer.
       this.glowPhase += dt;
       const g = this._glow(this.glowPhase * ((2 * Math.PI) / this.glowPeriod));
       for (const p of this.trapPanels) p.brightness = g;
     }
 
-    // Always draw the board while open, so the clickable maze shows before any cell is caged.
+    // Always draw the board while open so the clickable maze shows before any action.
     this._draw();
   }
 
@@ -187,12 +280,14 @@ export class PrisonMode {
         const caged = this.trapCell && this.trapCell.x === x && this.trapCell.y === y;
         const bright = Math.max(h?.brightness ?? 0, v?.brightness ?? 0);
         if (bright > 0.01) {
-          // Caged cell glows red (danger); others (fading releases) stay cool.
+          // Caged/actioned cell glows red; others (fading releases) stay cool.
           ctx.fillStyle = caged ? `rgba(255,90,70,${bright})` : `rgba(158,197,255,${bright})`;
           ctx.fillRect(gx + 1, gy + 1, cell - 2, cell - 2);
         }
-        if (caged) {
-          ctx.strokeStyle = '#ff5a46';
+        // Selection outline (blue); the actioned cell is outlined red.
+        const selected = this._selected && this._selected.x === x && this._selected.y === y;
+        if (caged || selected) {
+          ctx.strokeStyle = caged ? '#ff5a46' : '#6ea8ff';
           ctx.lineWidth = 2;
           ctx.strokeRect(gx + 1.5, gy + 1.5, cell - 3, cell - 3);
         }

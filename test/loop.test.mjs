@@ -76,7 +76,7 @@ function simulate(actions, engine, watch, { dt = 20, end }) {
 function run() {
   const engine = buildEngine();
   const actions = GENERATORS['blocks-descending'](engine, {
-    groups: GROUPS, cycles: 2, deactivationDelay: 0, activationDelay: 0,
+    groups: GROUPS, cycles: 2, deactivationDelay: 0, activationDelay: 0, downPos: DOWN,
   });
   return simulate(actions, engine, { shared: SHARED, aOwn: A_OWN }, { end: 4 * T + 4000 });
 }
@@ -132,7 +132,7 @@ test('shared wall RISES + dims during handoff, then is met/stolen by B', () => {
 test('stolen wall tracks B\'s descent closely after the handoff', () => {
   const engine = buildEngine();
   const actions = GENERATORS['blocks-descending'](engine, {
-    groups: GROUPS, cycles: 2, deactivationDelay: 0, activationDelay: 0,
+    groups: GROUPS, cycles: 2, deactivationDelay: 0, activationDelay: 0, downPos: DOWN,
   });
   // Watch the shared wall against B's OWN (uncontested) wall as B descends (B's south = h(0,1)).
   const trace = simulate(actions, engine, { shared: SHARED, bOwn: [0, 1, 'h'] }, { end: 4 * T + 4000 });

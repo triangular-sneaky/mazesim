@@ -142,8 +142,10 @@ export function loadLoops() {
     // `generator` inside the behavior section lets a behavior reuse an existing generator
     // with different default params — without any new code. Falls back to behavior name.
     const generator = behaviorDef.generator ?? e.behavior;
-    const { generator: _drop, ...defaults } = behaviorDef; // strip generator key from params
+    // Strip non-param keys (generator, uiParams) from the behavior defaults before merging.
+    const { generator: _drop, uiParams: _uiDefault, ...defaults } = behaviorDef;
     const params = { ...defaults, ...(e.params || {}) };
+    const uiParams = e.uiParams ?? behaviorDef.uiParams; // param editor spec (optional)
 
     // 'x'/'X' mark occupied-but-unassigned cells (like '.', they join no block).
     const RESERVED = new Set(['x', 'X']);
@@ -156,6 +158,6 @@ export function loadLoops() {
     const groups = [...byBlock.entries()]
       .sort((a, b) => String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true }))
       .map(([block, cells]) => ({ block, cells }));
-    return { id: e.id, name: e.name, desc: e.desc, behavior: e.behavior, generator, groups, params };
+    return { id: e.id, name: e.name, desc: e.desc, behavior: e.behavior, generator, groups, params, uiParams };
   });
 }
