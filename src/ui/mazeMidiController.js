@@ -11,11 +11,8 @@
  * cycle all the way back to the origin, so firing 16 in quick succession leaves the
  * panel where it started while the light ends up set.
  *
- * setLight(levels) drives brightness while holding position: for each note it emits
- * PAIRS (=16) of (note-off, note-on) — 16 note-ons net zero movement, and the final
- * message per note is the note-on, so the light lands at the requested level. Losing
- * or reordering a message breaks the balance (panel drifts, or light ends off), so
- * exactly 16 pairs are sent — no re-sends, no extra note-ons.
+ * The firmware counts a step only on an OFF→ON transition (a bare run of note-ons counts
+ * as ONE; the note-off re-arms it), and it honors 0x80 note-off, not 0x90 velocity-0.
  *
  * Send order is switchable (this.interleave):
  *   interleaved — round 0 = the first message of every note, round 1 = the second
@@ -30,12 +27,15 @@
  * Value convention (per note in the levels map): 1 = off … 127 = max. 0 is reserved
  * (it would read as a note-off), so the dimmest usable "on" level is 1.
  *
- * Beyond the fixed-`pairs` investigation sweep (`move`), this also exposes the stateful
- * drive primitives used by the maze HUD, both paced through the same token bucket:
- *   sendSteps(Map<note,{steps,vel}>) — emit EXACTLY `steps` (off,on@vel) pairs per note
- *                                      (the planner decides the count); sequential.
+ * Primitives:
+ *   sendSteps(Map<note,{steps,vel}>) — emit EXACTLY `steps` (off,on@vel) pairs per note (the
+ *                                      planner decides the count); the maze HUD's drive path.
  *   sendOff(notes)                   — one bare note-off per note (light off, no move).
- * `deadNotes` is a hard send-ban set kept in sync with the HUD's dead panels.
+ *   driveTest({...})                 — manual investigation bench: drive N steps per note with a
+ *                                      chosen step template + independent on/off hold times, to
+ *                                      find the sequencing/timing the firmware counts reliably.
+ * `sendSteps`/`sendOff` are paced through the shared token bucket; `driveTest` uses exact
+ * timestamps (bypasses the bucket). `deadNotes` is a hard send-ban kept in sync with dead panels.
  */
 export class MazeMidiController {
   constructor(opts = {}) {
@@ -298,6 +298,75 @@ export class MazeMidiController {
     return true;
   }
 
+  /**
+   * MIDI-investigation test bench: drive each note in [lo..hi] `steps` steps, building each step
+   * from `mode` with independent on/off hold times, and put it on the wire with computed
+   * timestamps via `_emit` (so "log MIDI" records exactly what was sent). Deterministic: it
+   * flushes the live queue and bypasses the token bucket — the point is exact chosen timing.
+   *
+   * Step templates ({ msg, hold } — hold = ms the state is held before the next message):
+   *   pairs      — off (offHold), on@vel (onHold)   [the working default]
+   *   on-first   — on@vel (onHold), off (offHold)   [order sensitivity]
+   *   ons-only   — on@vel (onHold+offHold)          [no off to re-arm → should count as 1]
+   *   double-off — off, off, on@vel                 [redundant re-arm; tests the lost-note-off idea]
+   *
+   * @param {{lo:number,hi:number,steps:number,onHold:number,offHold:number,mode:string,vel:number,interleave:boolean}} opts
+   */
+  driveTest({ lo, hi, steps, onHold, offHold, mode = 'pairs', vel = 100, interleave = false }) {
+    const out = this._output();
+    if (!out) { this._setStatus('no MIDI output selected', false); return false; }
+    const a = Math.min(lo, hi), b = Math.max(lo, hi);
+    const notes = [];
+    for (let n = a; n <= b; n++) if (n >= 0 && n <= 127) notes.push(n);
+    if (!notes.length || steps <= 0) { this._setStatus('nothing to drive', false); return false; }
+
+    this._cancel(); // clear any live backlog so the test timing is clean
+
+    const OFF = (n) => [0x80, n, 0];
+    const ON = (n) => [0x90, n, vel];
+    const stepMsgs = (n) => {
+      switch (mode) {
+        case 'on-first':   return [{ msg: ON(n), hold: onHold }, { msg: OFF(n), hold: offHold }];
+        case 'ons-only':   return [{ msg: ON(n), hold: onHold + offHold }];
+        case 'double-off': return [
+          { msg: OFF(n), hold: Math.max(1, Math.round(offHold / 2)) },
+          { msg: OFF(n), hold: Math.max(1, Math.round(offHold / 2)) },
+          { msg: ON(n), hold: onHold },
+        ];
+        case 'pairs':
+        default:           return [{ msg: OFF(n), hold: offHold }, { msg: ON(n), hold: onHold }];
+      }
+    };
+
+    const t0 = this._now() + 1;
+    let when = t0;
+    let count = 0;
+    if (!interleave) {
+      // One note fully, then the next.
+      for (const n of notes) {
+        for (let s = 0; s < steps; s++) {
+          for (const { msg, hold } of stepMsgs(n)) { this._emit(out, msg, when); when += Math.max(0, hold); count++; }
+        }
+      }
+    } else {
+      // Round-robin: each step, each phase, send that phase to every note (spaced by the wire gap),
+      // then hold once — a note's effective on/off hold emerges from the whole group's timing.
+      const wire = Math.max(0, this.delayMs);
+      const phases = stepMsgs(notes[0]).length;
+      for (let s = 0; s < steps; s++) {
+        for (let p = 0; p < phases; p++) {
+          for (const n of notes) { this._emit(out, stepMsgs(n)[p].msg, when); when += wire; count++; }
+          when += Math.max(0, stepMsgs(notes[0])[p].hold);
+        }
+      }
+    }
+
+    const dur = Math.round(when - t0);
+    this._setStatus(`drive ${notes.length}×${steps} · ${mode} · on ${onHold}/off ${offHold}ms · ~${dur}ms`, true);
+    if (this._activityEl) this._activityEl.textContent = `${count} msgs${interleave ? ' · interleave' : ''}`;
+    return true;
+  }
+
   // ---- Web MIDI lifecycle ---------------------------------------------------
 
   async _ensureMidi() {
@@ -445,19 +514,49 @@ export class MazeMidiController {
     burstHint.textContent = 'max msgs before throttling kicks in';
     burstRow.append(this._burstInput, burstHint);
 
-    // Pairs (controller property) — (note-off, note-on) pairs per note
-    const pairsRow = document.createElement('div');
-    pairsRow.className = 'row';
-    pairsRow.innerHTML = '<label>pairs</label>';
-    this._pairsInput = numInput(1, 64, this.pairs);
-    this._pairsInput.addEventListener('change', () => {
-      const v = Math.max(1, Math.min(64, Math.round(Number(this._pairsInput.value) || 1)));
-      this._pairsInput.value = v; this.pairs = v;
-    });
-    const pairsHint = document.createElement('span');
-    pairsHint.className = 'hint'; pairsHint.style.margin = '0';
-    pairsHint.textContent = 'off/on pairs per note (16 = full cycle)';
-    pairsRow.append(this._pairsInput, pairsHint);
+    // ---- Sequencing test bench --------------------------------------------
+    // Drive N steps per note with a chosen step template + independent on/off hold times, to
+    // find the sequencing/timing the firmware counts reliably (its step counter drifts).
+    const modeRow = document.createElement('div');
+    modeRow.className = 'row';
+    modeRow.innerHTML = '<label>mode</label>';
+    this._modeSel = document.createElement('select');
+    this._modeSel.style.cssText = 'flex:1;width:auto';
+    for (const [v, label] of [
+      ['pairs', 'pairs (off→on)'], ['on-first', 'on→off'], ['ons-only', 'ons only'], ['double-off', 'double-off'],
+    ]) {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = label;
+      this._modeSel.append(o);
+    }
+    modeRow.append(this._modeSel);
+
+    const stepsRow = document.createElement('div');
+    stepsRow.className = 'row';
+    stepsRow.innerHTML = '<label>steps</label>';
+    this._stepsInput = numInput(1, 64, 8);
+    const stepsHint = document.createElement('span');
+    stepsHint.className = 'hint'; stepsHint.style.margin = '0';
+    stepsHint.textContent = 'steps to drive each note';
+    stepsRow.append(this._stepsInput, stepsHint);
+
+    const onHoldRow = document.createElement('div');
+    onHoldRow.className = 'row';
+    onHoldRow.innerHTML = '<label>on hold (ms)</label>';
+    this._onHoldInput = numInput(0, 1000, 50);
+    const onHoldHint = document.createElement('span');
+    onHoldHint.className = 'hint'; onHoldHint.style.margin = '0';
+    onHoldHint.textContent = 'note held ON before its off';
+    onHoldRow.append(this._onHoldInput, onHoldHint);
+
+    const offHoldRow = document.createElement('div');
+    offHoldRow.className = 'row';
+    offHoldRow.innerHTML = '<label>off hold (ms)</label>';
+    this._offHoldInput = numInput(0, 1000, 50);
+    const offHoldHint = document.createElement('span');
+    offHoldHint.className = 'hint'; offHoldHint.style.margin = '0';
+    offHoldHint.textContent = 'note held OFF before its on (re-arm)';
+    offHoldRow.append(this._offHoldInput, offHoldHint);
 
     // Interleave toggle
     const interRow = document.createElement('div');
@@ -476,9 +575,9 @@ export class MazeMidiController {
     const fireRow = document.createElement('div');
     fireRow.className = 'row';
     this._fireBtn = document.createElement('button');
-    this._fireBtn.textContent = 'setLight';
+    this._fireBtn.textContent = 'Drive';
     this._fireBtn.style.flex = '1';
-    this._fireBtn.addEventListener('click', () => this._fireSweep());
+    this._fireBtn.addEventListener('click', () => this._fireDrive());
     this._panicBtn = document.createElement('button');
     this._panicBtn.textContent = 'panic';
     this._panicBtn.title = 'All lights off (note-off 0–127, no movement)';
@@ -506,22 +605,25 @@ export class MazeMidiController {
     const hint = document.createElement('div');
     hint.className = 'hint';
     hint.textContent =
-      'Sends 16 (note-off, note-on) pairs per note, interleaved across the sweep, to ' +
-      'set brightness while holding panels in place. 1 = off, 127 = max.';
+      'Sequencing test: drive the note range `steps` steps using the chosen mode, holding each ' +
+      'note ON/OFF for the given ms (velocity = brightness). Turn on “log MIDI” in the maze HUD ' +
+      'and count what the panels register vs. what was sent. Interleave = round-robin (multi-panel).';
 
-    el.append(enableRow, outRow, rangeRow, brightRow, delayRow, rateRow, burstRow, pairsRow, interRow, fireRow, statusRow, actRow, hint);
+    el.append(enableRow, outRow, rangeRow, brightRow, delayRow, rateRow, burstRow,
+      modeRow, stepsRow, onHoldRow, offHoldRow, interRow, fireRow, statusRow, actRow, hint);
     this.el = el;
   }
 
-  _fireSweep() {
+  /** Read the test-bench UI and run driveTest. */
+  _fireDrive() {
     if (!this.enabled) { this._setStatus('enable output first', false); return; }
-    let a = Math.max(0, Math.min(127, Math.round(Number(this._startInput.value) || 0)));
-    let b = Math.max(0, Math.min(127, Math.round(Number(this._endInput.value) || 0)));
-    if (a > b) [a, b] = [b, a];
-    const level = Math.max(1, Math.min(127, Math.round(Number(this._brightVal.value) || 1)));
-    const levels = new Map();
-    for (let n = a; n <= b; n++) levels.set(n, level);
-    this.move(levels);
+    const lo = Math.max(0, Math.min(127, Math.round(Number(this._startInput.value) || 0)));
+    const hi = Math.max(0, Math.min(127, Math.round(Number(this._endInput.value) || 0)));
+    const steps = Math.max(1, Math.round(Number(this._stepsInput.value) || 1));
+    const onHold = Math.max(0, Math.round(Number(this._onHoldInput.value) || 0));
+    const offHold = Math.max(0, Math.round(Number(this._offHoldInput.value) || 0));
+    const vel = Math.max(1, Math.min(127, Math.round(Number(this._brightVal.value) || 1)));
+    this.driveTest({ lo, hi, steps, onHold, offHold, mode: this._modeSel.value, vel, interleave: this.interleave });
   }
 
   _setStatus(text, ok = false) {
