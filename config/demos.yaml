@@ -92,7 +92,7 @@ demos:
   # ---- Lullaby V ------------------------------------------------------------
   - id: lullaby-drop
     name: Drop
-    desc: field rests on the floor; center cell bounces — lit on descent, dark on ascent — each impact ripples a lift wave outward, looping until stopped
+    desc: field rests on the floor; center cell bounces — lit on descent, dark on ascent — each impact ripples a 1-step lift wave outward. Budget-aware — engages only the nearest panels the wire can afford (auto, or cap with max panels)
     group: Lullaby V
     generator: lullaby-drop
     params:
@@ -100,15 +100,16 @@ demos:
       dropLo: 0
       dropHeight: 200
       rippleInterval: 400
-      rippleHeight: 0.05
-      rippleFadeout: 1.5
+      maxRipplePanels: 0     # 0 = auto (from rateHz + bounce cadence); >0 caps rippled panels
+      rippleWindowMs: 0      # 0 = auto (the bounce-cycle time); >0 overrides the budget window
+      repeats: 0            # number of bounce cycles; 0 = unlimited
       loop: true
     uiParams:
-      - { key: dropLo,         label: drop floor,     min: 0,    max: 200,  step: 5    }
-      - { key: dropHeight,     label: drop peak,      min: 50,   max: 255,  step: 5    }
-      - { key: rippleInterval, label: ripple ms/cell,  min: 50,   max: 5000, step: 25   }
-      - { key: rippleHeight,   label: wave height,    min: 0.01, max: 0.30, step: 0.01 }
-      - { key: rippleFadeout,  label: ripple fadeout, min: 0,    max: 5,    step: 0.1  }
+      - { key: dropLo,          label: drop floor,      min: 0,  max: 200,  step: 5  }
+      - { key: dropHeight,      label: drop peak,       min: 50, max: 255,  step: 5  }
+      - { key: rippleInterval,  label: ripple ms/cell,  min: 50, max: 5000, step: 25 }
+      - { key: maxRipplePanels, label: max panels (0=auto), min: 0, max: 90, step: 1 }
+      - { key: repeats,         label: repeats (0=inf), min: 0,  max: 20,   step: 1  }
 
   - id: particles
     name: Particles

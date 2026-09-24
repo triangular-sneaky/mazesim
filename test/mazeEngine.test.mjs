@@ -34,22 +34,21 @@ test('a move to a NEW height plans the minimal steps (planMove)', () => {
   assert.equal(state.get(60).z, 3);
 });
 
-test('lighting a panel in place strikes via a stay — 16 at an endpoint, never 0 steps', () => {
+test('lighting a panel in place is a cheap 1-step pulse (a 1-level wobble), never 0 steps', () => {
   const { engine, state, sent } = makeEngine();          // fresh belief: z=0 (endpoint), off
   engine.move(0, 0, 'h', 0, 1);                          // same height, turn light ON
   assert.equal(sent.length, 1, 'still sends');
-  assert.equal(stepsFor(sent[0], 60), 16, 'endpoint stay = full 16-step loop');
-  assert.equal(sent[0].get(60).vel, 127, 'the light rides the stay');
-  assert.equal(state.get(60).z, 0, 'ends back at the same height');
+  assert.equal(stepsFor(sent[0], 60), 1, 'in-place light = single note-on');
+  assert.equal(sent[0].get(60).vel, 127, 'the light rides the pulse');
+  assert.equal(state.get(60).z, 1, 'wobbles up one level (z 0 -> 1)');
 });
 
-test('a mid-height in-place light strike stays via the near wall (non-zero, < 16)', () => {
+test('a mid-height in-place light pulse is also a single step', () => {
   const { engine, state, sent } = makeEngine();
-  state.commit(60, { z: 4, v: 1 }, 0);                   // mid-range, off
+  state.commit(60, { z: 4, v: 1 }, 0);                   // mid-range, off, heading up
   engine.move(0, 0, 'h', 128, 1);                        // posToZ(128)=4 == current z, turn on
-  const s = stepsFor(sent[0], 60);
-  assert.ok(s > 0 && s < 16, `mid stay is non-zero and less than a full loop (got ${s})`);
-  assert.equal(state.get(60).z, 4, 'still at the same height');
+  assert.equal(stepsFor(sent[0], 60), 1, 'one step, not a wall-and-back stay');
+  assert.equal(state.get(60).z, 5, 'wobbles one step in its current direction (z 4 -> 5)');
 });
 
 test('an OFF panel asked to stay put and stay off is a genuine no-op — nothing sent', () => {

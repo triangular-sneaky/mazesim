@@ -6,6 +6,7 @@
  * An action = { t: ms, run: () => void }.
  */
 import { panelCenter, cellEdges, cellEdgeList, edgeKey, seRimPanels } from '../model/layout.js';
+import { zToPos, posToZ } from '../model/mazeState.js';
 
 export class DemoPlayer {
   /**
@@ -23,6 +24,7 @@ export class DemoPlayer {
     this._running       = null;
     this._demo          = null;
     this._triggerArmed  = false;
+    this._playsRemaining = 0;   // loop re-plays left (see play()); Infinity = unlimited
   }
 
   stop() {
@@ -66,7 +68,7 @@ export class DemoPlayer {
     return true;
   }
 
-  play(demo) {
+  play(demo, isReplay = false) {
     this.stop();
     const gen = GENERATORS[demo.generator];
     if (!gen) {
@@ -76,6 +78,13 @@ export class DemoPlayer {
     this._running = demo.id;
     this._demo    = demo;
     const params  = demo.params || {};
+
+    // Arm the repeat counter on a fresh (user-initiated) play: `repeats` = total cycles for a
+    // looping movement, 0 = unlimited. Loop re-plays keep counting down without re-arming.
+    if (!isReplay) {
+      const repeats = params.repeats ?? 0;
+      this._playsRemaining = repeats > 0 ? repeats - 1 : Infinity;
+    }
 
     // Trigger-armed mode: only settle the structure, suppress auto-loop.
     if (this._triggerArmed && TRIGGERABLE[demo.generator]) {
@@ -89,13 +98,14 @@ export class DemoPlayer {
       this._timers.push(this._schedule(a.run, a.t));
     }
     // Auto-retrigger: `period > 0` waits N seconds after the movement ends then replays;
-    // `loop: true` replays immediately when the last action fires (continuous loop).
+    // `loop: true` replays immediately when the last action fires. Bounded by `repeats`.
     const period = params.period;
     const loop   = params.loop;
-    if (period > 0 || loop) {
+    if ((period > 0 || loop) && this._playsRemaining > 0) {
+      this._playsRemaining -= 1;
       const endT  = actions.length ? Math.max(...actions.map((a) => a.t)) : 0;
       const delay = period > 0 ? endT + period * 1000 : endT;
-      this._timers.push(this._schedule(() => this.play(demo), delay));
+      this._timers.push(this._schedule(() => this.play(demo, true), delay));
     }
   }
 }
@@ -641,6 +651,8 @@ export const GENERATORS = {
    * @param params.cycles         number of bounces (default 6)
    * @param params.rippleInterval ms delay per unit of cell-distance for the ripple wave (default 200)
    * @param params.centerX/Y      override auto-computed center cell (optional)
+   * @param params.maxRipplePanels cap on rippled panels (0/absent = auto from the wire budget)
+   * @param params.rippleWindowMs  budget window for the ripple (0/absent = the bounce-cycle time)
    */
   'lullaby-drop'(engine, params) {
     const cells = cellsOf(engine);
@@ -661,20 +673,29 @@ export const GENERATORS = {
     const otherPanels  = allPanels.filter((p) => !centerKeys.has(`${p.x},${p.y},${p.orient}`));
 
     const rate = engine.speed * (1 - engine.ease);
-    // Time for the farthest panel to reach the floor from its current position.
-    const settleMs     = rate > 0
-      ? (Math.max(0, ...allPanels.map((p) => Math.abs(p.position - floorPos))) / rate) * 1000
-      : 0;
+    // "At the floor" is a BELIEF question — the sim render can still be gliding down (it starts at
+    // the rest position, not the floor), so check tracked z, not the sim position. If the field
+    // already believes it's on the floor, skip the settle and drop right away (settleMs = 0, no
+    // settle action). Fall back to the sim position for a non-state engine (tests).
+    const floorZ = posToZ(floorPos);
+    const belief = engine.state?.list?.();
+    const maxOffFloor = Math.max(0, ...allPanels.map((p) => Math.abs(p.position - floorPos)));
+    const alreadyAtFloor = belief
+      ? belief.every((bp) => bp.dead || bp.z === floorZ)
+      : maxOffFloor < 1;
+    const settleMs = alreadyAtFloor || rate <= 0 ? 0 : (maxOffFloor / rate) * 1000;
     // Center travels floor→peak (risingMs) then peak→dropLo (fallingMs).
     const risingMs  = rate > 0 ? ((dropHeight - floorPos) / rate) * 1000 : 0;
     const fallingMs = rate > 0 ? ((dropHeight - dropLo)   / rate) * 1000 : 0;
-    const rippleLift = Math.round((dropHeight - dropLo) * (params.rippleHeight ?? 0.05));
-    const riseMs       = rate > 0 ? (rippleLift / rate) * 1000 : 0;
+    // Ripple lift = one level up (a genuine 1-step move), lit; returns to the floor after riseMs.
+    const rippleTop = zToPos(posToZ(floorPos) + 1);
+    const riseMs = rate > 0 ? (Math.abs(rippleTop - floorPos) / rate) * 1000 : 0;
 
     const actions = [];
 
-    // Phase 0 — settle everything to the floor, lights off.
-    actions.push({ t: 0, run: () => engine.sweepAll(floorPos, { brightness: 0 }) });
+    // Phase 0 — settle everything to the floor, lights off. Skipped when the field is already on
+    // the floor (settleMs = 0), so the bounce/drop starts right away.
+    if (!alreadyAtFloor) actions.push({ t: 0, run: () => engine.sweepAll(floorPos, { brightness: 0 }) });
 
     // One bounce + ripple per play (loop: true in params drives continuous repeat).
     const t0    = settleMs;
@@ -692,24 +713,52 @@ export const GENERATORS = {
     // Floor touch: center light off (stays at dropLo).
     actions.push({ t: tDrop, run: () => centerPanels.forEach((p) => engine.off(p.x, p.y, p.orient)) });
 
-    // Ripple-start cap: the first ring must fire within rippleStartCap ms of the drop.
-    // Compute the closest panel distance, then shift all times so that first ring ≤ cap.
-    const rippleStartCap = params.rippleStartCap ?? 300;
-    const rippleDistances = otherPanels.map((p) => {
+    // Budget-aware coverage: at ~rateHz/2 steps/s and ~16 steps to lift-and-return one panel near
+    // the floor, only so many fit before the next impact. `maxRipplePanels` overrides the auto
+    // value, and coverage scales up automatically if the wire budget (rateHz) rises.
+    const stepsPerSec = Math.max(1, (engine.midi?.rateHz ?? 100) / 2);
+    const windowSec = Math.max(0.001, (params.rippleWindowMs || (settleMs + risingMs + fallingMs)) / 1000);
+    const COST_PER_PANEL = 16; // ~1-step lift + full-cycle return near the floor
+    const auto = Math.floor((stepsPerSec * windowSec) / COST_PER_PANEL);
+    const cap = params.maxRipplePanels > 0 ? params.maxRipplePanels : auto;
+    const affordable = Math.max(1, Math.min(cap, otherPanels.length));
+
+    // Pick the participants as a UNIFORM SCATTER across the whole field (farthest-point sampling,
+    // seeded at the impact), not the nearest ring — so it reads as sparse ripples spread over the
+    // field by angle and distance, not a dense wave. The rest sit the ripple out. Each still fires
+    // in outward order (by distance), so the sparse points still propagate from the impact.
+    const pts = otherPanels.map((p) => {
       const { px, py } = panelCenter(p.x, p.y, p.orient);
-      return Math.hypot(px - ccx, py - ccy);
+      return { p, px, py, dist: Math.hypot(px - ccx, py - ccy) };
     });
-    const firstDist = rippleDistances.length > 0 ? Math.min(...rippleDistances) : 0;
-    // Negative shift = move the whole wave earlier so the nearest ring lands at cap.
+    const ranked = [];
+    if (pts.length) {
+      const pool = pts.slice();
+      let seed = 0;
+      for (let i = 1; i < pool.length; i++) if (pool[i].dist < pool[seed].dist) seed = i; // nearest impact
+      ranked.push(pool.splice(seed, 1)[0]);
+      while (ranked.length < affordable && pool.length) {
+        let bestI = 0, bestD = -Infinity;
+        for (let i = 0; i < pool.length; i++) {
+          let dMin = Infinity;
+          for (const c of ranked) {
+            const d = Math.hypot(pool[i].px - c.px, pool[i].py - c.py);
+            if (d < dMin) dMin = d;
+          }
+          if (dMin > bestD) { bestD = dMin; bestI = i; }
+        }
+        ranked.push(pool.splice(bestI, 1)[0]);
+      }
+    }
+
+    // Ripple-start cap: shift the whole wave earlier so the nearest participant lands within the cap.
+    const rippleStartCap = params.rippleStartCap ?? 300;
+    const firstDist = ranked.length ? Math.min(...ranked.map((r) => r.dist)) : 0;
     const rippleShift = Math.min(0, rippleStartCap - firstDist * rippleInterval);
 
-    for (let i = 0; i < otherPanels.length; i++) {
-      const p    = otherPanels[i];
-      const dist = rippleDistances[i];
-      const wt   = tDrop + dist * rippleInterval + rippleShift;
-      const rippleTop = floorPos + rippleLift;
-
-      // Ripple pass: lift + light on, then drop back to the floor, dark.
+    for (const { p, dist } of ranked) {
+      const wt = tDrop + dist * rippleInterval + rippleShift;
+      // Ripple pass: lift one level + light on, then drop back to the floor, dark.
       actions.push({ t: wt, run: () => engine.move(p.x, p.y, p.orient, rippleTop, 1) });
       actions.push({ t: wt + riseMs, run: () => engine.move(p.x, p.y, p.orient, floorPos, 0) });
     }

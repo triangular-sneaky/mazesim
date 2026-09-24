@@ -318,8 +318,14 @@ export class MazeHud {
 
     const acts = document.createElement('div');
     acts.className = 'row';
+    // Untracked step: send one step over MIDI WITHOUT advancing belief — resync the real maze up
+    // to belief when it dropped a step. Diverges send from belief on purpose, so it's red.
+    const rawBtn = mkBtn('untracked ×1', () => this._stepRawSelected());
+    rawBtn.classList.add('danger');
+    rawBtn.title = 'Send one step to the selected panels (MIDI only) without changing tracked belief — to nudge the physical maze back in sync';
     acts.append(
       mkBtn('step ×1', () => this._stepSelected()),
+      rawBtn,
       mkBtn(p.dead ? 'revive' : 'mark dead', () => this._toggleDeadSelected()),
     );
     card.append(acts);
@@ -462,6 +468,22 @@ export class MazeHud {
   _stepSelected() {
     for (const note of this.selected) this._step(note);
     this._afterChange();
+  }
+
+  /**
+   * UNTRACKED step: send one step to every selected panel over MIDI but do NOT advance belief —
+   * a resync nudge (belief already accounts for the step the maze dropped). No belief change, so
+   * no mirror re-drive; the 3D view stays put while the physical maze catches up.
+   */
+  _stepRawSelected() {
+    if (!this._guard()) return;
+    const plan = new Map();
+    for (const note of this.selected) {
+      const p = this.state.get(note);
+      if (!p || p.dead) continue;
+      plan.set(note, { steps: 1, vel: Math.max(1, p.brightness || 1) });
+    }
+    if (plan.size) this.midi.sendSteps(plan);
   }
 
   /** Mark every selected panel dead/alive (target = opposite of the primary's state). */

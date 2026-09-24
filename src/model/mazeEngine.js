@@ -1,5 +1,5 @@
 import { PanelEngine } from './engine.js';
-import { planMove, planStay, posToZ, brightToVel } from './mazeState.js';
+import { planMove, applyStep, posToZ, brightToVel } from './mazeState.js';
 
 /**
  * MazeEngine — the state-backed engine adapter.
@@ -52,9 +52,9 @@ export class MazeEngine extends PanelEngine {
    * A move never generates a POINTLESS operation, but any real change costs a step. Cases:
    *  - height changes  → send those note-ons (min vel 1 so an off panel can still travel); the
    *                      light rides along at `brightness`.
-   *  - same height, light must turn ON or change level → strike it with an in-place STAY (walk
-   *                      to the near wall and back; non-zero, a full 16-step loop at an endpoint,
-   *                      because light can only ride a note-on).
+   *  - same height, light must turn ON or change level → a cheap 1-step PULSE (a single note-on):
+   *                      light can only ride a note-on, so lighting in place advances one step (a
+   *                      1-level wobble). Far cheaper than the old walk-to-the-wall stay.
    *  - same height, light must turn OFF (currently lit) → a bare note-off, no movement.
    *  - same height, no light change — keeping brightness, or already off and staying off → a
    *                      GENUINE no-op: send nothing, don't reinforce "off" with a velocity-1 step.
@@ -80,10 +80,11 @@ export class MazeEngine extends PanelEngine {
     } else if (!keepLight && onVel !== p.brightness) {
       // Same height, but the light must change.
       if (onVel > 0) {
-        // Turn on / change level in place — strike via a real stay (never 0 steps).
-        const stay = planStay(p.z, p.v);
-        if (this.midi?.enabled) this.midi.sendSteps(new Map([[note, { steps: stay.steps, vel: onVel }]]));
-        this.state.commit(note, stay.newState, onVel);
+        // Turn on / change level in place — a cheap 1-step pulse (single note-on; 1-level wobble),
+        // since light can only ride a note-on. Was a walk-to-the-wall stay (up to 16 steps).
+        const newState = applyStep({ z: p.z, v: p.v });
+        if (this.midi?.enabled) this.midi.sendSteps(new Map([[note, { steps: 1, vel: onVel }]]));
+        this.state.commit(note, newState, onVel);
       } else {
         // Turn off in place — a bare note-off, no movement.
         if (this.midi?.enabled) this.midi.sendOff([note]);

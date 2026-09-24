@@ -309,6 +309,7 @@ export class MazeMidiController {
    *   on-first   — on@vel (onHold), off (offHold)   [order sensitivity]
    *   ons-only   — on@vel (onHold+offHold)          [no off to re-arm → should count as 1]
    *   double-off — off, off, on@vel                 [redundant re-arm; tests the lost-note-off idea]
+   *   sandwich   — pairs, plus ONE trailing off      [ends dark; tests whether a closing off matters]
    *
    * @param {{lo:number,hi:number,steps:number,onHold:number,offHold:number,mode:string,vel:number,interleave:boolean}} opts
    */
@@ -333,10 +334,12 @@ export class MazeMidiController {
           { msg: OFF(n), hold: Math.max(1, Math.round(offHold / 2)) },
           { msg: ON(n), hold: onHold },
         ];
+        case 'sandwich':   // pairs; the trailing off is appended once after all steps (below)
         case 'pairs':
         default:           return [{ msg: OFF(n), hold: offHold }, { msg: ON(n), hold: onHold }];
       }
     };
+    const trailingOff = mode === 'sandwich';
 
     const t0 = this._now() + 1;
     let when = t0;
@@ -347,18 +350,25 @@ export class MazeMidiController {
         for (let s = 0; s < steps; s++) {
           for (const { msg, hold } of stepMsgs(n)) { this._emit(out, msg, when); when += Math.max(0, hold); count++; }
         }
+        if (trailingOff) { this._emit(out, OFF(n), when); when += Math.max(0, offHold); count++; }
       }
     } else {
-      // Round-robin: each step, each phase, send that phase to every note (spaced by the wire gap),
-      // then hold once — a note's effective on/off hold emerges from the whole group's timing.
-      const wire = Math.max(0, this.delayMs);
-      const phases = stepMsgs(notes[0]).length;
-      for (let s = 0; s < steps; s++) {
-        for (let p = 0; p < phases; p++) {
-          for (const n of notes) { this._emit(out, stepMsgs(n)[p].msg, when); when += wire; count++; }
-          when += Math.max(0, stepMsgs(notes[0])[p].hold);
+      // Interleave: each note runs its OWN correctly-timed step sequence (a step is a unit — off
+      // held offHold, then on held onHold; steps back-to-back), so every note keeps its own on/off
+      // hold. The notes are staggered by one wire gap so their messages pipeline and the wire stays
+      // busy — the next note's step starts right after the previous note's, not after a group hold.
+      const wire = Math.max(1, this.delayMs);
+      const events = [];
+      notes.forEach((n, i) => {
+        let t = t0 + i * wire;
+        for (let s = 0; s < steps; s++) {
+          for (const { msg, hold } of stepMsgs(n)) { events.push({ when: t, msg }); t += Math.max(0, hold); }
         }
-      }
+        if (trailingOff) events.push({ when: t, msg: OFF(n) });
+      });
+      events.sort((e1, e2) => e1.when - e2.when);
+      for (const e of events) { this._emit(out, e.msg, e.when); count++; }
+      when = events.length ? events[events.length - 1].when + 1 : t0;
     }
 
     const dur = Math.round(when - t0);
@@ -517,19 +527,34 @@ export class MazeMidiController {
     // ---- Sequencing test bench --------------------------------------------
     // Drive N steps per note with a chosen step template + independent on/off hold times, to
     // find the sequencing/timing the firmware counts reliably (its step counter drifts).
+    const MODE_DESC = {
+      pairs:        'off→on per step — the working default.',
+      'on-first':   'on→off per step — reversed order (tests order sensitivity).',
+      'ons-only':   'note-ons only, no off — should count as 1 (nothing re-arms it).',
+      'double-off': 'off, off, on per step — a redundant re-arm (tests a lost note-off).',
+      sandwich:     'off→on per step, then ONE extra off at the end — leaves it dark (tests a trailing off).',
+    };
     const modeRow = document.createElement('div');
     modeRow.className = 'row';
     modeRow.innerHTML = '<label>mode</label>';
     this._modeSel = document.createElement('select');
     this._modeSel.style.cssText = 'flex:1;width:auto';
     for (const [v, label] of [
-      ['pairs', 'pairs (off→on)'], ['on-first', 'on→off'], ['ons-only', 'ons only'], ['double-off', 'double-off'],
+      ['pairs', 'pairs (off→on)'], ['on-first', 'on→off'], ['ons-only', 'ons only'],
+      ['double-off', 'double-off'], ['sandwich', 'sandwich (off→on…off)'],
     ]) {
       const o = document.createElement('option');
       o.value = v; o.textContent = label;
       this._modeSel.append(o);
     }
     modeRow.append(this._modeSel);
+
+    // Per-mode explanation, updated on selection.
+    const modeHint = document.createElement('div');
+    modeHint.className = 'hint';
+    modeHint.style.margin = '2px 0 0';
+    modeHint.textContent = MODE_DESC.pairs;
+    this._modeSel.addEventListener('change', () => { modeHint.textContent = MODE_DESC[this._modeSel.value] || ''; });
 
     const stepsRow = document.createElement('div');
     stepsRow.className = 'row';
@@ -568,7 +593,7 @@ export class MazeMidiController {
     this._interCheck.addEventListener('change', () => { this.interleave = this._interCheck.checked; });
     const interHint = document.createElement('span');
     interHint.className = 'hint'; interHint.style.margin = '0';
-    interHint.textContent = 'off: one note fully, then next';
+    interHint.textContent = 'off: one note fully, then next · on: notes pipelined (each keeps its own hold)';
     interRow.append(this._interCheck, interHint);
 
     // Fire
@@ -610,7 +635,7 @@ export class MazeMidiController {
       'and count what the panels register vs. what was sent. Interleave = round-robin (multi-panel).';
 
     el.append(enableRow, outRow, rangeRow, brightRow, delayRow, rateRow, burstRow,
-      modeRow, stepsRow, onHoldRow, offHoldRow, interRow, fireRow, statusRow, actRow, hint);
+      modeRow, modeHint, stepsRow, onHoldRow, offHoldRow, interRow, fireRow, statusRow, actRow, hint);
     this.el = el;
   }
 
