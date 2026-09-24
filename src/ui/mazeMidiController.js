@@ -37,6 +37,8 @@
  * `sendSteps`/`sendOff` are paced through the shared token bucket; `driveTest` uses exact
  * timestamps (bypasses the bucket). `deadNotes` is a hard send-ban kept in sync with dead panels.
  */
+const MIDI_SETTINGS_KEY = 'mazeMidi.settings.v1';
+
 export class MazeMidiController {
   constructor(opts = {}) {
     this.delayMs   = opts.delayMs ?? 3;  // wire gap between consecutive messages (intra-note)
@@ -49,6 +51,11 @@ export class MazeMidiController {
     this._requested = false;
     this.access     = null;
     this.selectedOutputId = null;
+
+    // Persisted global transport settings (rate/burst/delay + the chosen output) override the
+    // config defaults above. Saved to localStorage on change; the maze belief lives separately.
+    this._settingsTimer = null;
+    this._loadSettings();
 
     // Persistent paced-send queue: every send APPENDS units to one FIFO drained by a single
     // long-lived pump under ONE token bucket, so the rate/burst guards hold across all callers
@@ -426,6 +433,35 @@ export class MazeMidiController {
     else this._setStatus('disabled', false);
   }
 
+  // ---- Global settings persistence (rate/burst/delay + chosen output) -------
+
+  /** Overlay persisted transport settings onto the config defaults (called once, in the ctor). */
+  _loadSettings() {
+    if (typeof localStorage === 'undefined') return;
+    let blob;
+    try { const raw = localStorage.getItem(MIDI_SETTINGS_KEY); blob = raw ? JSON.parse(raw) : null; }
+    catch { blob = null; }
+    if (!blob) return;
+    if (Number.isFinite(blob.delayMs)) this.delayMs = Math.max(0, Math.min(50, blob.delayMs));
+    if (Number.isFinite(blob.rateHz))  this.rateHz  = Math.max(1, Math.min(2000, Math.round(blob.rateHz)));
+    if (Number.isFinite(blob.burst))   this.burst   = Math.max(1, Math.min(512, Math.round(blob.burst)));
+    if (typeof blob.selectedOutputId === 'string') this.selectedOutputId = blob.selectedOutputId;
+  }
+
+  /** Debounced write of the global transport settings to localStorage. */
+  _saveSettings() {
+    if (typeof localStorage === 'undefined') return;
+    if (this._settingsTimer) clearTimeout(this._settingsTimer);
+    this._settingsTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(MIDI_SETTINGS_KEY, JSON.stringify({
+          delayMs: this.delayMs, rateHz: this.rateHz, burst: this.burst,
+          selectedOutputId: this.selectedOutputId,
+        }));
+      } catch { /* quota / disabled — best effort */ }
+    }, 300);
+  }
+
   // ---- UI -------------------------------------------------------------------
 
   _buildUI() {
@@ -453,7 +489,7 @@ export class MazeMidiController {
     this._outputSel = document.createElement('select');
     this._outputSel.style.cssText = 'flex:1;width:auto';
     this._outputSel.innerHTML = '<option value="">enable to list outputs</option>';
-    this._outputSel.addEventListener('change', () => { this.selectedOutputId = this._outputSel.value; });
+    this._outputSel.addEventListener('change', () => { this.selectedOutputId = this._outputSel.value; this._saveSettings(); });
     outRow.append(this._outputSel);
 
     // Sweep range
@@ -489,7 +525,7 @@ export class MazeMidiController {
     this._delayInput = numInput(0, 50, this.delayMs);
     this._delayInput.addEventListener('change', () => {
       const v = Math.max(0, Math.min(50, Number(this._delayInput.value) || 0));
-      this._delayInput.value = v; this.delayMs = v;
+      this._delayInput.value = v; this.delayMs = v; this._saveSettings();
     });
     const delayHint = document.createElement('span');
     delayHint.className = 'hint'; delayHint.style.margin = '0';
@@ -503,7 +539,7 @@ export class MazeMidiController {
     this._rateInput = numInput(1, 2000, this.rateHz);
     this._rateInput.addEventListener('change', () => {
       const v = Math.max(1, Math.min(2000, Math.round(Number(this._rateInput.value) || 1)));
-      this._rateInput.value = v; this.rateHz = v;
+      this._rateInput.value = v; this.rateHz = v; this._saveSettings();
     });
     const rateHint = document.createElement('span');
     rateHint.className = 'hint'; rateHint.style.margin = '0';
@@ -517,7 +553,7 @@ export class MazeMidiController {
     this._burstInput = numInput(1, 512, this.burst);
     this._burstInput.addEventListener('change', () => {
       const v = Math.max(1, Math.min(512, Math.round(Number(this._burstInput.value) || 1)));
-      this._burstInput.value = v; this.burst = v;
+      this._burstInput.value = v; this.burst = v; this._saveSettings();
     });
     const burstHint = document.createElement('span');
     burstHint.className = 'hint'; burstHint.style.margin = '0';
@@ -627,12 +663,25 @@ export class MazeMidiController {
     this._activityEl.textContent = '—';
     actRow.append(this._activityEl);
 
+    // Light-blue = transport-wide: these apply to EVERY movement (output routing + the token-bucket
+    // guards), not just this test bench. The unhighlighted fields below only drive this test.
+    const markUniversal = (row) => {
+      row.style.background   = 'rgba(110, 184, 255, 0.13)';
+      row.style.borderLeft   = '3px solid #6db8ff';
+      row.style.paddingLeft  = '6px';
+      row.style.borderRadius = '3px';
+      row.title = 'Transport-wide — affects every movement, not just this test';
+    };
+    [enableRow, outRow, delayRow, rateRow, burstRow].forEach(markUniversal);
+
     const hint = document.createElement('div');
     hint.className = 'hint';
-    hint.textContent =
+    hint.innerHTML =
+      '<b style="color:#6db8ff">Light-blue</b> fields are transport-wide — they shape every ' +
+      'movement’s MIDI. The rest drive only this test.<br>' +
       'Sequencing test: drive the note range `steps` steps using the chosen mode, holding each ' +
       'note ON/OFF for the given ms (velocity = brightness). Turn on “log MIDI” in the maze HUD ' +
-      'and count what the panels register vs. what was sent. Interleave = round-robin (multi-panel).';
+      'and count what the panels register vs. what was sent. Interleave = pipelined per-note steps (multi-panel).';
 
     el.append(enableRow, outRow, rangeRow, brightRow, delayRow, rateRow, burstRow,
       modeRow, modeHint, stepsRow, onHoldRow, offHoldRow, interRow, fireRow, statusRow, actRow, hint);

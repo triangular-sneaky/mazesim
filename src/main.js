@@ -113,219 +113,219 @@ function main() {
     uiParams: lp.uiParams,
   }));
   if (loopDemos.length) {
-    const lastChase = [...demos].map((d, i) => d.group === 'Chase' ? i : -1).filter((i) => i >= 0).pop();
-    const after = lastChase != null ? lastChase + 1 : demos.length;
+    const lastPrison = [...demos].map((d, i) => d.group === 'prison' ? i : -1).filter((i) => i >= 0).pop();
+    const after = lastPrison != null ? lastPrison + 1 : demos.length;
     demos.splice(after, 0, ...loopDemos);
   }
 
   try {
-  const grid = new Grid(config);
+    const grid = new Grid(config);
 
-  // Background-safe clock: drives the control path (movement ticks + MIDI pacing) from the
-  // audio thread so it keeps running when the tab is hidden (rAF pauses / timers throttle).
-  const clock = new BackgroundClock();
-  const clockTimers = {
-    schedule: (fn, ms) => clock.setTimeout(fn, ms),
-    unschedule: (id) => clock.clearTimeout(id),
-  };
-  // Unlock the audio heartbeat on the first user gesture (autoplay policy), and re-check when
-  // the tab becomes visible again.
-  const unlockClock = () => clock.resume();
-  ['pointerdown', 'keydown', 'touchstart'].forEach((ev) =>
-    window.addEventListener(ev, unlockClock, { once: true }));
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) clock.resume(); });
-
-  // Transport + tracked belief must exist BEFORE the engine: the engine is state-backed —
-  // every movement drives belief -> MIDI -> mirror to 3D — so it needs both. (midiMap was
-  // loaded up top; it also drives the engine's panel set.) The transport paces through the
-  // background clock so MIDI keeps flowing in a hidden tab.
-  const mazeMidi = new MazeMidiController({ ...(config.midi || {}), ...clockTimers });
-  const mazeState = new MazeState(midiMap.byNote);
-  const engine = new MazeEngine(config, panels, { state: mazeState, midi: mazeMidi });
-
-  // Render
-  const viewport = document.getElementById('viewport');
-  const view = new SceneView(viewport, config, grid, cells);
-  const meshes = new PanelMeshes(view.scene, config, grid, engine.list());
-
-  // Selection wiring: grid map <-> controls <-> mesh highlight
-  const gridMap = new GridMap(
-    document.getElementById('grid-map'), engine, cells,
-    (x, y) => controls.select(x, y, controls.sel?.orient ?? 'h'),
-  );
-  const controls = new Controls(
-    document.getElementById('controls-body'),
-    document.getElementById('selection-label'),
-    engine, config,
-    (sel) => { gridMap.setSelected(sel.x, sel.y); meshes.setSelected(`${sel.x},${sel.y},${sel.orient}`); },
-  );
-
-  // Expanded "all cells" control board (hidden until mode = all)
-  const cellBoard = new CellBoard(document.getElementById('cell-board'), engine, cells);
-
-  // Controls mode toggle: single (per-panel) | all (cell board)
-  const controlsBody = document.getElementById('controls-body');
-  const cellboardWrap = document.getElementById('cellboard-wrap');
-  document.querySelectorAll('#ctrl-mode [data-mode]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const all = btn.dataset.mode === 'all';
-      controlsBody.style.display = all ? 'none' : '';
-      cellboardWrap.style.display = all ? '' : 'none';
-      document.querySelectorAll('#ctrl-mode [data-mode]').forEach((b) =>
-        b.classList.toggle('primary', b === btn));
-    });
-  });
-
-  // Demos — scheduled on the background clock so timeline movements keep firing when hidden.
-  const player = new DemoPlayer(engine, clockTimers);
-
-  // Auto-cycle: play a sequence of wave/ripple demos on a repeating timer, advancing
-  // every CYCLE_INTERVAL ms and looping back to the start. Runs on load until the user
-  // manually triggers a demo (or Stop), and can be restarted via the "Cycle demos" button.
-  const CYCLE_SEQUENCE = ['wave-ns', 'wave-we', 'ripple'];
-  const CYCLE_INTERVAL = 7000;
-  let cycleTimer = null;
-  function stopCycle() {
-    if (cycleTimer !== null) { clearInterval(cycleTimer); cycleTimer = null; }
-  }
-  function startCycle() {
-    stopCycle();
-    let i = 0;
-    const step = () => {
-      const demo = demos.find((d) => d.id === CYCLE_SEQUENCE[i % CYCLE_SEQUENCE.length]);
-      if (demo) player.play(demo);
-      i++;
+    // Background-safe clock: drives the control path (movement ticks + MIDI pacing) from the
+    // audio thread so it keeps running when the tab is hidden (rAF pauses / timers throttle).
+    const clock = new BackgroundClock();
+    const clockTimers = {
+      schedule: (fn, ms) => clock.setTimeout(fn, ms),
+      unschedule: (id) => clock.clearTimeout(id),
     };
-    step();
-    cycleTimer = setInterval(step, CYCLE_INTERVAL);
-  }
+    // Unlock the audio heartbeat on the first user gesture (autoplay policy), and re-check when
+    // the tab becomes visible again.
+    const unlockClock = () => clock.resume();
+    ['pointerdown', 'keydown', 'touchstart'].forEach((ev) =>
+      window.addEventListener(ev, unlockClock, { once: true }));
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) clock.resume(); });
 
-  // Interactive movements (live controllers instead of timelines), keyed by movement id.
-  const prison = new PrisonMode(engine, cells, config);
-  const lullabyFloat = new LullabyFloat(engine);
-  const midi = new MidiMode(engine, { player });
+    // Transport + tracked belief must exist BEFORE the engine: the engine is state-backed —
+    // every movement drives belief -> MIDI -> mirror to 3D — so it needs both. (midiMap was
+    // loaded up top; it also drives the engine's panel set.) The transport paces through the
+    // background clock so MIDI keeps flowing in a hidden tab.
+    const mazeMidi = new MazeMidiController({ ...(config.midi || {}), ...clockTimers });
+    const mazeState = new MazeState(midiMap.byNote);
+    const engine = new MazeEngine(config, panels, { state: mazeState, midi: mazeMidi });
 
-  // Mount MIDI as a persistent sidebar section — not a movement.
-  document.getElementById('midi-section').appendChild(midi.el);
+    // Render
+    const viewport = document.getElementById('viewport');
+    const view = new SceneView(viewport, config, grid, cells);
+    const meshes = new PanelMeshes(view.scene, config, grid, engine.list());
 
-  // MIDI investigation: sends note messages OUT to the physical maze (transport built above).
-  document.getElementById('midi-investigation-section').appendChild(mazeMidi.el);
+    // Selection wiring: grid map <-> controls <-> mesh highlight
+    const gridMap = new GridMap(
+      document.getElementById('grid-map'), engine, cells,
+      (x, y) => controls.select(x, y, controls.sel?.orient ?? 'h'),
+    );
+    const controls = new Controls(
+      document.getElementById('controls-body'),
+      document.getElementById('selection-label'),
+      engine, config,
+      (sel) => { gridMap.setSelected(sel.x, sel.y); meshes.setSelected(`${sel.x},${sel.y},${sel.orient}`); },
+    );
 
-  // Stateful physical-maze control: note map -> per-panel (z,v) tracker -> HUD (both built above).
-  validateMidiMap(midiMap, engine);
-  const mazeHud = new MazeHud(document.getElementById('maze-hud-section'), {
-    engine, grid, view, state: mazeState, midi: mazeMidi,
-    viewport, cells, meshes,
-  });
+    // Expanded "all cells" control board (hidden until mode = all)
+    const cellBoard = new CellBoard(document.getElementById('cell-board'), engine, cells);
 
-  const demoBank = new DemoBank(document.getElementById('demo-list'), demos, player, {
-    onManual: stopCycle,
-    onCycle: startCycle,
-    searchEl: document.getElementById('move-search'),
-    controllers: { prison, 'lullaby-float': lullabyFloat },
-    engine,
-    collapseAll: true, // all groups start collapsed; user expands as needed
-  });
+    // Controls mode toggle: single (per-panel) | all (cell board)
+    const controlsBody = document.getElementById('controls-body');
+    const cellboardWrap = document.getElementById('cellboard-wrap');
+    document.querySelectorAll('#ctrl-mode [data-mode]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const all = btn.dataset.mode === 'all';
+        controlsBody.style.display = all ? 'none' : '';
+        cellboardWrap.style.display = all ? '' : 'none';
+        document.querySelectorAll('#ctrl-mode [data-mode]').forEach((b) =>
+          b.classList.toggle('primary', b === btn));
+      });
+    });
 
-  // Panic (either panic button routes through mazeMidi.panic) stops ALL movements first —
-  // the timeline player, any interactive controller, and the auto-cycle — then kills lights.
-  mazeMidi.onPanic = () => { stopCycle(); demoBank.stopAll(); };
-  // On load we do NOT auto-play a movement: the sim now mirrors tracked belief (persisted or
-  // neutral), and playing "all up" would drive the real maze (state -> MIDI) on every reload.
-  // The demo cycle is still available via the "Cycle demos" button.
+    // Demos — scheduled on the background clock so timeline movements keep firing when hidden.
+    const player = new DemoPlayer(engine, clockTimers);
 
-  // Global movement speed (cruise units/sec) — applies to every movement.
-  const speed = document.getElementById('move-speed');
-  const speedVal = document.getElementById('move-speed-val');
-  speed.value = engine.speed;
-  speedVal.value = engine.speed;
-  speed.addEventListener('input', () => {
-    engine.setSpeed(Number(speed.value));
-    speedVal.value = speed.value;
-  });
-  speedVal.addEventListener('change', () => {
-    const v = Math.max(20, Math.min(400, Math.round(Number(speedVal.value) || 0)));
-    speedVal.value = v; speed.value = v; engine.setSpeed(v);
-  });
+    // Auto-cycle: play a sequence of wave/ripple demos on a repeating timer, advancing
+    // every CYCLE_INTERVAL ms and looping back to the start. Runs on load until the user
+    // manually triggers a demo (or Stop), and can be restarted via the "Cycle demos" button.
+    const CYCLE_SEQUENCE = ['wave-ns', 'wave-we', 'ripple'];
+    const CYCLE_INTERVAL = 7000;
+    let cycleTimer = null;
+    function stopCycle() {
+      if (cycleTimer !== null) { clearInterval(cycleTimer); cycleTimer = null; }
+    }
+    function startCycle() {
+      stopCycle();
+      let i = 0;
+      const step = () => {
+        const demo = demos.find((d) => d.id === CYCLE_SEQUENCE[i % CYCLE_SEQUENCE.length]);
+        if (demo) player.play(demo);
+        i++;
+      };
+      step();
+      cycleTimer = setInterval(step, CYCLE_INTERVAL);
+    }
 
-  // Camera presets
-  document.querySelectorAll('#camera-presets [data-preset]').forEach((btn) => {
-    btn.addEventListener('click', () => view.setPreset(btn.dataset.preset));
-  });
+    // Interactive movements (live controllers instead of timelines), keyed by movement id.
+    const prison = new PrisonMode(engine, cells, config);
+    const lullabyFloat = new LullabyFloat(engine);
+    const midi = new MidiMode(engine, { player });
 
-  // Walls toggle
-  const wallsToggle = document.getElementById('toggle-walls');
-  wallsToggle.addEventListener('change', () => view.setWallsVisible(wallsToggle.checked));
+    // Mount MIDI as a persistent sidebar section — not a movement.
+    document.getElementById('midi-section').appendChild(midi.el);
 
-  // Video overlay: transparent scene + wireframe room over a live camera feed.
-  new VideoMode(
-    document.getElementById('bg-video'),
-    document.getElementById('toggle-video'),
-    document.getElementById('video-source'),
-    (on) => view.setVideoMode(on),
-    document.getElementById('video-adjust'),
-    (lock) => { view.controls.enabled = !lock; }, // lock the maze while adjusting the video
-  );
+    // MIDI investigation: sends note messages OUT to the physical maze (transport built above).
+    document.getElementById('midi-investigation-section').appendChild(mazeMidi.el);
 
-  // Camera FOV — match the virtual camera's perspective to the physical one (video mode).
-  const fov = document.getElementById('video-fov');
-  const fovVal = document.getElementById('video-fov-val');
-  fov.value = view.camera.fov;
-  fovVal.value = view.camera.fov;
-  fov.addEventListener('input', () => {
-    view.setFov(Number(fov.value));
-    fovVal.value = fov.value;
-  });
-  fovVal.addEventListener('change', () => {
-    const v = Math.max(20, Math.min(120, Math.round(Number(fovVal.value) || 0)));
-    fovVal.value = v; fov.value = v; view.setFov(v);
-  });
+    // Stateful physical-maze control: note map -> per-panel (z,v) tracker -> HUD (both built above).
+    validateMidiMap(midiMap, engine);
+    const mazeHud = new MazeHud(document.getElementById('maze-hud-section'), {
+      engine, grid, view, state: mazeState, midi: mazeMidi,
+      viewport, cells, meshes,
+    });
 
-  // Mobile controls toggle: show/hide the overlay sidebar (button is hidden on desktop).
-  const sidebarToggle = document.getElementById('sidebar-toggle');
-  sidebarToggle.addEventListener('click', () => {
-    const open = document.body.classList.toggle('controls-open');
-    sidebarToggle.textContent = open ? '✕ close' : '☰ controls';
-  });
+    const demoBank = new DemoBank(document.getElementById('demo-list'), demos, player, {
+      onManual: stopCycle,
+      onCycle: startCycle,
+      searchEl: document.getElementById('move-search'),
+      controllers: { prison, 'lullaby-float': lullabyFloat },
+      engine,
+      collapseAll: true, // all groups start collapsed; user expands as needed
+    });
 
-  // Detachable controls window (docked by default). Resize the 3D view on dock/detach.
-  setupDetach(document.getElementById('sidebar'), () => {
-    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
-  });
+    // Panic (either panic button routes through mazeMidi.panic) stops ALL movements first —
+    // the timeline player, any interactive controller, and the auto-cycle — then kills lights.
+    mazeMidi.onPanic = () => { stopCycle(); demoBank.stopAll(); };
+    // On load we do NOT auto-play a movement: the sim now mirrors tracked belief (persisted or
+    // neutral), and playing "all up" would drive the real maze (state -> MIDI) on every reload.
+    // The demo cycle is still available via the "Cycle demos" button.
 
-  // Fold/unfold sidebar sections (state persisted). Run after every section is mounted.
-  setupCollapsibleSections();
+    // Global movement speed (cruise units/sec) — applies to every movement.
+    const speed = document.getElementById('move-speed');
+    const speedVal = document.getElementById('move-speed-val');
+    speed.value = engine.speed;
+    speedVal.value = engine.speed;
+    speed.addEventListener('input', () => {
+      engine.setSpeed(Number(speed.value));
+      speedVal.value = speed.value;
+    });
+    speedVal.addEventListener('change', () => {
+      const v = Math.max(20, Math.min(400, Math.round(Number(speedVal.value) || 0)));
+      speedVal.value = v; speed.value = v; engine.setSpeed(v);
+    });
 
-  // CONTROL loop — the state simulation + anything that generates MIDI. Runs on the
-  // background-safe clock so it keeps advancing (and sending) when the tab is hidden.
-  clock.onTick((dt) => {
-    engine.tick(dt);       // advance panel motion (positions the movements read back)
-    prison.tick(dt);       // drives caged panels; no-op unless its controls are open
-    lullabyFloat.tick(dt); // elastic follow; no-op when inactive
-    midi.tick(dt);         // re-asserts held brightness; mutes movement LEDs when mute is on
-    mazeHud.tick(dt);      // mirror tracked belief onto the sim (sim = physical belief)
-  });
+    // Camera presets
+    document.querySelectorAll('#camera-presets [data-preset]').forEach((btn) => {
+      btn.addEventListener('click', () => view.setPreset(btn.dataset.preset));
+    });
 
-  // RENDER loop — drawing only. rAF naturally pauses when the tab is hidden; nothing to draw.
-  function frame() {
-    meshes.sync();
-    gridMap.draw();
-    cellBoard.draw();
-    mazeHud.draw();          // 2D belief canvas
-    controls.refresh();
-    view.render();
-    mazeHud.updateOverlay(); // reposition virtual chips against the fresh camera
+    // Walls toggle
+    const wallsToggle = document.getElementById('toggle-walls');
+    wallsToggle.addEventListener('change', () => view.setWallsVisible(wallsToggle.checked));
+
+    // Video overlay: transparent scene + wireframe room over a live camera feed.
+    new VideoMode(
+      document.getElementById('bg-video'),
+      document.getElementById('toggle-video'),
+      document.getElementById('video-source'),
+      (on) => view.setVideoMode(on),
+      document.getElementById('video-adjust'),
+      (lock) => { view.controls.enabled = !lock; }, // lock the maze while adjusting the video
+    );
+
+    // Camera FOV — match the virtual camera's perspective to the physical one (video mode).
+    const fov = document.getElementById('video-fov');
+    const fovVal = document.getElementById('video-fov-val');
+    fov.value = view.camera.fov;
+    fovVal.value = view.camera.fov;
+    fov.addEventListener('input', () => {
+      view.setFov(Number(fov.value));
+      fovVal.value = fov.value;
+    });
+    fovVal.addEventListener('change', () => {
+      const v = Math.max(20, Math.min(120, Math.round(Number(fovVal.value) || 0)));
+      fovVal.value = v; fov.value = v; view.setFov(v);
+    });
+
+    // Mobile controls toggle: show/hide the overlay sidebar (button is hidden on desktop).
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    sidebarToggle.addEventListener('click', () => {
+      const open = document.body.classList.toggle('controls-open');
+      sidebarToggle.textContent = open ? '✕ close' : '☰ controls';
+    });
+
+    // Detachable controls window (docked by default). Resize the 3D view on dock/detach.
+    setupDetach(document.getElementById('sidebar'), () => {
+      requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    });
+
+    // Fold/unfold sidebar sections (state persisted). Run after every section is mounted.
+    setupCollapsibleSections();
+
+    // CONTROL loop — the state simulation + anything that generates MIDI. Runs on the
+    // background-safe clock so it keeps advancing (and sending) when the tab is hidden.
+    clock.onTick((dt) => {
+      engine.tick(dt);       // advance panel motion (positions the movements read back)
+      prison.tick(dt);       // drives caged panels; no-op unless its controls are open
+      lullabyFloat.tick(dt); // elastic follow; no-op when inactive
+      midi.tick(dt);         // re-asserts held brightness; mutes movement LEDs when mute is on
+      mazeHud.tick(dt);      // mirror tracked belief onto the sim (sim = physical belief)
+    });
+
+    // RENDER loop — drawing only. rAF naturally pauses when the tab is hidden; nothing to draw.
+    function frame() {
+      meshes.sync();
+      gridMap.draw();
+      cellBoard.draw();
+      mazeHud.draw();          // 2D belief canvas
+      controls.refresh();
+      view.render();
+      mazeHud.updateOverlay(); // reposition virtual chips against the fresh camera
+      requestAnimationFrame(frame);
+    }
     requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
 
-  console.log(`mazesim: ${cells.length} cells, ${panels.length} panels loaded.`);
+    console.log(`mazesim: ${cells.length} cells, ${panels.length} panels loaded.`);
   } catch (e) {
     const msg = String((e && e.message) || e);
     if (/webgl|context/i.test(msg)) {
       fail('WebGL could not start, so the 3D view can\'t render.\n\n' +
-           'Fix: enable hardware acceleration in your browser settings (or update your GPU driver), ' +
-           'then reload. Chrome/Edge: Settings → System → "Use graphics acceleration when available".');
+        'Fix: enable hardware acceleration in your browser settings (or update your GPU driver), ' +
+        'then reload. Chrome/Edge: Settings → System → "Use graphics acceleration when available".');
     } else {
       fail(`Init error:\n${(e && e.stack) || e}`);
     }

@@ -1,5 +1,5 @@
 import { PanelEngine } from './engine.js';
-import { planMove, applyStep, posToZ, brightToVel } from './mazeState.js';
+import { planMove, planStay, applyStep, posToZ, zToPos, brightToVel } from './mazeState.js';
 
 /**
  * MazeEngine — the state-backed engine adapter.
@@ -29,12 +29,27 @@ export class MazeEngine extends PanelEngine {
    * @param {import('./mazeState.js').MazeState} deps.state  tracked belief (source of truth)
    * @param {import('../ui/mazeMidiController.js').MazeMidiController} deps.midi  transport
    */
-  constructor(config, panelDefs, { state, midi }) {
+  constructor(config, panelDefs, { state, midi, now }) {
     super(config, panelDefs);
     this.state = state;
     this.midi = midi;
     // key "x,y,orient" -> note number, so the sim-facing action API can reach the belief.
     this._noteOf = new Map(state.list().map((p) => [`${p.x},${p.y},${p.orient}`, p.note]));
+
+    // ---- Per-panel move gate (opt-in) ----------------------------------------
+    // Hardware truth: a panel takes a real note-on burst reliably, but sending it a NEW move while
+    // it's still physically travelling corrupts the firmware's step count. When `serializeMoves` is
+    // on, at most one move is in flight per panel: a move to a busy panel is DEFERRED (latest-wins)
+    // and dispatched by tick() once the panel's travel finishes. Off by default (today's behavior).
+    this.serializeMoves = false;
+    // In-place relight strategy (per-movement). Default: a cheap 1-step pulse — but a note-on always
+    // steps, so it wobbles the panel one level (floor +1, top −1). Set true to relight via planStay
+    // (walk to the near wall and back → z preserved exactly) for precise static shapes; costs up to
+    // 16 steps. Set per play() from the movement's `stayLight` param.
+    this.stayLight = false;
+    this._now = now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+    this._busyUntil = new Map(); // note -> ms timestamp the current move should finish
+    this._pending   = new Map(); // note -> latest deferred { x, y, orient, target, brightness, duration }
   }
 
   noteAt(x, y, orient) { return this._noteOf.get(`${x},${y},${orient}`); }
@@ -65,9 +80,18 @@ export class MazeEngine extends PanelEngine {
     if (note == null) return false;
     const p = this.state.get(note);
     if (!p || p.dead) return false;
+
+    // Gate: if this panel's previous move is still travelling, defer (latest target wins). tick()
+    // re-dispatches it once the panel is free — so we never send a panel a step mid-motion.
+    if (this.serializeMoves && this._now() < (this._busyUntil.get(note) ?? 0)) {
+      this._pending.set(note, { x, y, orient, target, brightness, duration });
+      return true;
+    }
+
     const key = `${x},${y},${orient}`;
     this._clearOff(key);
 
+    const fromZ = p.z; // capture before commit — `p` is a live ref the state mutates in place
     const zT = posToZ(Math.max(0, Math.min(255, target)));
     const keepLight = brightness == null;
     const onVel = keepLight ? p.brightness : brightToVel(brightness); // 0..127
@@ -77,16 +101,20 @@ export class MazeEngine extends PanelEngine {
       // Real move — the note-ons carry the light (min vel 1 so an off panel can still travel).
       if (this.midi?.enabled) this.midi.sendSteps(new Map([[note, { steps, vel: Math.max(1, onVel) }]]));
       this.state.commit(note, newState, onVel);
+      this._markBusy(note, fromZ, newState.z);
     } else if (!keepLight && onVel !== p.brightness) {
       // Same height, but the light must change.
       if (onVel > 0) {
-        // Turn on / change level in place — a cheap 1-step pulse (single note-on; 1-level wobble),
-        // since light can only ride a note-on. Was a walk-to-the-wall stay (up to 16 steps).
-        const newState = applyStep({ z: p.z, v: p.v });
-        if (this.midi?.enabled) this.midi.sendSteps(new Map([[note, { steps: 1, vel: onVel }]]));
-        this.state.commit(note, newState, onVel);
+        // Turn on / change level in place, since light can only ride a note-on. Two strategies:
+        //  - pulse (default): one note-on — cheap, but wobbles the panel a level (floor +1, top −1).
+        //  - stay: walk to the near wall and back (planStay) → same z exactly, up to 16 steps — for
+        //    precise static shapes (e.g. Flowie Diagonal) where the ±1 wobble is wrong.
+        const relight = this.stayLight ? planStay(p.z, p.v) : { steps: 1, newState: applyStep({ z: p.z, v: p.v }) };
+        if (this.midi?.enabled) this.midi.sendSteps(new Map([[note, { steps: relight.steps, vel: onVel }]]));
+        this.state.commit(note, relight.newState, onVel);
+        this._markBusy(note, fromZ, relight.newState.z);
       } else {
-        // Turn off in place — a bare note-off, no movement.
+        // Turn off in place — a bare note-off, no movement (no travel → no busy).
         if (this.midi?.enabled) this.midi.sendOff([note]);
         this.state.setBrightness(note, 0);
       }
@@ -99,11 +127,20 @@ export class MazeEngine extends PanelEngine {
     return true;
   }
 
+  /** Mark a panel busy for the net-displacement glide time (only matters while serializing). */
+  _markBusy(note, fromZ, toZ) {
+    if (!this.serializeMoves) return;
+    const rate = this.speed * (1 - this.ease); // effective units/sec — same as sweepTo()
+    const travelMs = rate > 0 ? (Math.abs(zToPos(toZ) - zToPos(fromZ)) / rate) * 1000 : 0;
+    this._busyUntil.set(note, this._now() + travelMs);
+  }
+
   /** Light off in place — the one standalone light action: a bare note-off (no move) + belief dark. */
   off(x, y, orient) {
     const note = this.noteAt(x, y, orient);
     if (note == null) return false;
     this._clearOff(`${x},${y},${orient}`);
+    this._pending.delete(note); // a deliberate light-off supersedes any queued move
     const p = this.state.get(note);
     if (!p) return false;
     if (!p.dead && p.brightness > 0 && this.midi?.enabled) this.midi.sendOff([note]);
@@ -146,5 +183,22 @@ export class MazeEngine extends PanelEngine {
    */
   renderMove(x, y, orient, targetPosition, opts = {}) {
     return super.movePanel(x, y, orient, targetPosition, opts);
+  }
+
+  // ---- Clock: advance sim, then drain any panels whose move has finished ------
+
+  tick(dt) {
+    super.tick(dt);
+    if (!this.serializeMoves || this._pending.size === 0) return;
+    const now = this._now();
+    // Snapshot the drainable notes first — re-dispatching sets a fresh busyUntil / may re-defer.
+    const ready = [];
+    for (const [note, req] of this._pending) {
+      if (now >= (this._busyUntil.get(note) ?? 0)) ready.push([note, req]);
+    }
+    for (const [note, req] of ready) {
+      this._pending.delete(note);
+      this.move(req.x, req.y, req.orient, req.target, req.brightness, req.duration);
+    }
   }
 }

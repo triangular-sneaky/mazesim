@@ -34,6 +34,7 @@ export class DemoPlayer {
     this._triggerTimers = [];
     this._running       = null;
     this._demo          = null;
+    if (this.engine) { this.engine.serializeMoves = false; this.engine.stayLight = false; } // reset per-movement flags
   }
 
   isRunning() { return this._running; }
@@ -78,6 +79,12 @@ export class DemoPlayer {
     this._running = demo.id;
     this._demo    = demo;
     const params  = demo.params || {};
+
+    // Per-panel move gate (opt-in per movement, toggleable in the GUI). Re-read each play/loop so a
+    // live checkbox change takes effect on the next cycle; stop() resets it to off.
+    this.engine.serializeMoves = !!params.gated;
+    // In-place relight via planStay (z-exact) instead of the 1-step pulse — per movement.
+    this.engine.stayLight = !!params.stayLight;
 
     // Arm the repeat counter on a fresh (user-initiated) play: `repeats` = total cycles for a
     // looping movement, 0 = unlimited. Loop re-plays keep counting down without re-arming.
@@ -145,8 +152,8 @@ function particlesPlan(engine, params) {
   const topPos          = params.topPos     ?? 255;
   const speed           = params.speed      ?? 300;
   const rippleSize      = params.rippleSize ?? 0.08;
+  const holdMs          = Math.max(0, params.holdMs ?? 800);
   const oppose          = (params.oppose  ?? 0) > 0;
-  const fadeIn          = (params.fadeIn  ?? 0) > 0;
 
   const panels = engine.list();
   const cells  = cellsOf(engine);
@@ -198,17 +205,22 @@ function particlesPlan(engine, params) {
     for (const { p, pos } of structData) engine.move(p.x, p.y, p.orient, pos, 0); // settle, dark
   }};
 
+  // Wait for panels to reach their structure positions before any particle ripples them (rippling a
+  // panel still travelling to place = a step sent mid-motion). Measure the distance to the SNAPPED
+  // target engine.move actually commits (zToPos(posToZ(pos))), not the raw structure position — a
+  // panel that quantizes up to ~half a z-level away travels further than the raw estimate, and the
+  // slowest one (the centre, for spiral-out) would otherwise be rippled mid-settle. A small guard
+  // keeps the first ripple from leading the last panel in.
+  const SETTLE_GUARD = 1.15;
   const rate    = engine.speed * (1 - engine.ease);
-  const settleMs = rate > 0
-    ? (Math.max(0, ...structData.map(({ p, pos }) => Math.abs(p.position - pos))) / rate) * 1000
-    : 500;
+  const settleDist = Math.max(0, ...structData.map(({ p, pos }) => Math.abs(p.position - zToPos(posToZ(pos)))));
+  const settleMs = rate > 0 ? (settleDist / rate) * 1000 * SETTLE_GUARD : 500;
 
   const totalSteps    = spiralOrder.length;
   const cycleDuration = totalSteps * speed;
   const groupSize     = oppose ? Math.max(1, Math.ceil(n / 2)) : n;
 
   const buildBurst = (tBase) => {
-    const burstRate = engine.speed * (1 - engine.ease);
     const burst = [];
     for (let i = 0; i < totalSteps; i++) {
       for (let pn = 0; pn < n; pn++) {
@@ -217,17 +229,16 @@ function particlesPlan(engine, params) {
         const p         = spiralOrder[spiralIdx];
         const sPos      = posOf.get(`${p.x},${p.y},${p.orient}`) ?? topPos;
         const lift      = Math.round(Math.max(1, (topPos - sPos) * rippleSize));
-        const rMs       = burstRate > 0 ? (lift / burstRate) * 1000 : 80;
 
         const pairGroup = oppose ? Math.floor(pn / 2) : pn;
         const stagger   = (pairGroup / groupSize) * cycleDuration;
         const t0        = tBase + stagger + i * speed;
 
-        const fadeMult = fadeIn ? Math.min(1, (stagger + i * speed) / Math.max(1, cycleDuration - speed)) : 1;
-
-        // Particle passes: lift + light on, then drop back to the structure, dark.
-        burst.push({ t: t0, run: () => engine.move(p.x, p.y, p.orient, sPos + lift, fadeMult) });
-        burst.push({ t: t0 + rMs, run: () => engine.move(p.x, p.y, p.orient, sPos, 0) });
+        // Particle passes: lift + light the panel on, hold it for `holdMs`, then drop back dark.
+        // `holdMs` is independent of the propagation `speed` (ms/panel), so trails overlap — on
+        // average ~holdMs/speed panels stay lit behind each particle.
+        burst.push({ t: t0,           run: () => engine.move(p.x, p.y, p.orient, sPos + lift, 1) });
+        burst.push({ t: t0 + holdMs,  run: () => engine.move(p.x, p.y, p.orient, sPos, 0) });
       }
     }
     return burst;
@@ -784,9 +795,9 @@ export const GENERATORS = {
    * @param params.topPos          resting height for periphery panels (default 255)
    * @param params.speed           ms per step along the trajectory (default 300)
    * @param params.rippleSize      lift fraction: how far each panel rises above structure (default 0.08)
-   * @param params.rippleFadeout   glow decay time in seconds (default 0.8)
+   * @param params.holdMs          how long each traced panel stays lit + lifted, ms (default 800).
+   *                               Independent of `speed`, so trails overlap (~holdMs/speed panels).
    * @param params.oppose          1 = odd particles travel reverse spiral in sync with even pair (default 0)
-   * @param params.fadeIn          1 = brightness ramps 0→1 over the first cycle (default 0)
    */
   particles(engine, params) {
     if (params.staticOnly) {

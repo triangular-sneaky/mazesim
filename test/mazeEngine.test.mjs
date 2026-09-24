@@ -9,7 +9,7 @@ const CONFIG = {
 };
 
 // One panel at (0,0,h) = note 60. A fake transport that records sendSteps plans and sendOffs.
-function makeEngine() {
+function makeEngine(deps = {}) {
   const byNote = new Map([[60, { x: 0, y: 0, orient: 'h', name: 'C4', deadInit: false }]]);
   const state = new MazeState(byNote, null);
   const sent = [];
@@ -20,7 +20,7 @@ function makeEngine() {
     sendSteps: (plan) => sent.push(plan),
     sendOff: (notes) => offs.push([...notes]),
   };
-  const engine = new MazeEngine(CONFIG, [{ x: 0, y: 0, orient: 'h' }], { state, midi });
+  const engine = new MazeEngine(CONFIG, [{ x: 0, y: 0, orient: 'h' }], { state, midi, ...deps });
   return { engine, state, sent, offs };
 }
 
@@ -41,6 +41,16 @@ test('lighting a panel in place is a cheap 1-step pulse (a 1-level wobble), neve
   assert.equal(stepsFor(sent[0], 60), 1, 'in-place light = single note-on');
   assert.equal(sent[0].get(60).vel, 127, 'the light rides the pulse');
   assert.equal(state.get(60).z, 1, 'wobbles up one level (z 0 -> 1)');
+});
+
+test('stayLight ON: lighting in place uses planStay — z is preserved exactly (no ±1 wobble)', () => {
+  const { engine, state, sent } = makeEngine();   // fresh: z=0 (floor), off
+  engine.stayLight = true;
+  engine.move(0, 0, 'h', 0, 1);                    // same height, light ON, via stay
+  assert.equal(sent.length, 1, 'still sends');
+  assert.equal(stepsFor(sent[0], 60), 16, 'floor stay = a full 16-step wall-and-back loop');
+  assert.equal(state.get(60).z, 0, 'z held exactly at the floor (not bumped to 1)');
+  assert.equal(sent[0].get(60).vel, 127, 'the light rides the stay');
 });
 
 test('a mid-height in-place light pulse is also a single step', () => {
@@ -83,4 +93,52 @@ test('dead panels are skipped entirely (no stay, no send)', () => {
   assert.equal(ok, false);
   assert.equal(sent.length, 0);
   assert.equal(offs.length, 0);
+});
+
+// ---- Per-panel move gate (serializeMoves) -----------------------------------
+
+test('gate OFF (default): back-to-back moves to the same panel both send immediately', () => {
+  const { engine, sent } = makeEngine();
+  engine.move(0, 0, 'h', 96, 1);   // z0 -> z3
+  engine.move(0, 0, 'h', 0, 1);    // immediate second move — no gate
+  assert.equal(sent.length, 2, 'both sends go out with the gate off');
+});
+
+test('gate ON: a move to a still-travelling panel is deferred (no MIDI) until it finishes', () => {
+  let t = 0;
+  const { engine, state, sent } = makeEngine({ now: () => t });
+  engine.serializeMoves = true;
+
+  engine.move(0, 0, 'h', 96, 1);   // z0 -> z3: dispatches now, marks the panel busy
+  assert.equal(sent.length, 1, 'first move dispatches');
+  assert.ok(engine._busyUntil.get(60) > 0, 'panel marked busy for its travel time');
+
+  engine.move(0, 0, 'h', 0, 1);    // new target while busy -> deferred, nothing on the wire
+  assert.equal(sent.length, 1, 'second move is held, not sent');
+  assert.equal(engine._pending.get(60).target, 0, 'latest target is pending');
+
+  engine.tick(0);                  // still busy -> stays pending
+  assert.equal(sent.length, 1, 'tick before travel ends does not dispatch');
+
+  t += 1e6;                        // travel long finished
+  engine.tick(0);                  // drain: panel is free -> pending dispatches
+  assert.equal(sent.length, 2, 'pending move dispatched once the panel is free');
+  assert.equal(engine._pending.has(60), false, 'pending cleared');
+  assert.equal(state.get(60).z, 0, 'belief reflects the drained move (z back to 0)');
+});
+
+test('gate ON: only the latest deferred target survives (latest-wins)', () => {
+  let t = 0;
+  const { engine, state, sent } = makeEngine({ now: () => t });
+  engine.serializeMoves = true;
+
+  engine.move(0, 0, 'h', 255, 1);  // z0 -> z8: dispatches, busy
+  engine.move(0, 0, 'h', 64, 1);   // deferred
+  engine.move(0, 0, 'h', 128, 1);  // replaces the earlier pending
+  assert.equal(engine._pending.get(60).target, 128, 'newest target wins');
+
+  t += 1e6;
+  engine.tick(0);
+  assert.equal(sent.length, 2, 'exactly one deferred move dispatched');
+  assert.equal(state.get(60).z, 4, 'landed at the latest target (posToZ(128)=4)');
 });

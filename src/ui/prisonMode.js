@@ -43,7 +43,7 @@ export class PrisonMode {
     this.peak = 0.95;        // glow / lit brightness ceiling
 
     // Down-bob params (operator-editable below).
-    this.oscillations = 0;   // total up-down cycles before holding at the ground (0 = endless)
+    this.oscillations = 2;   // total up-down cycles before holding at the ground (0 = endless)
     this.bottomDwell = 0.2;  // s held at the ground before rising
     this.topDwell = 0.2;     // s held at the top before dropping
 
@@ -121,6 +121,13 @@ export class PrisonMode {
     this.el.append(canvas, selRow, btnRow, oscRow, botRow, topRow, hint);
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+
+    // Default selection (operator-editable via the box / board): cell (1,5) if the layout has it.
+    const dfltX = 1, dfltY = 5;
+    if (this.occupied.has(`${dfltX},${dfltY}`)) {
+      this._selected = { x: dfltX, y: dfltY };
+      this._cellInput.value = `${dfltX},${dfltY}`;
+    }
   }
 
   /** The 4 panels framing cell (x,y): N/S h-walls, W/E v-walls (h=south / v=east; see
@@ -134,6 +141,10 @@ export class PrisonMode {
   setActive(on) {
     if (on === this._active) return;    // idempotent
     this._active = on;
+    // Per-panel move gate: while Prison is live, never send a panel a new step until its previous
+    // move's travel has finished (the bob already waits on sim `moving`; this enforces it at the
+    // belief/wire level too). Reset when the controls close so timeline movements start ungated.
+    this.engine.serializeMoves = on;
     if (!on) this._release();           // closing the controls stops the bob and frees the cage
     // Turning on does NOT move anything — wait for the operator to select and press Up/Down.
   }

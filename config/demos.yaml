@@ -27,6 +27,45 @@ demos:
     uiParams:
       - { key: position, label: height, min: 0, max: 255, step: 5 }
 
+  # ---- Flowie ------------------------------------------------------------
+  - id: geo-corners
+    name: Corners
+    desc: four corner clusters lit at heights that match a perspective box view — back corners high, front corners low; all other panels up and dark
+    group: Flowie
+    generator: geo
+    params: { shape: corners, restPos: 255 }
+    uiParams:
+      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
+
+  - id: geo-faces
+    name: Faces
+    desc: north wall lit high, south stepped wall lit low — two opposing box faces at different depths; all other panels up and dark
+    group: Flowie
+    generator: geo
+    params: { shape: faces, restPos: 255 }
+    uiParams:
+      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
+
+  - id: geo-corner
+    name: Corner
+    desc: north wall high + west wall mid — two planes meeting at the NW joint, one lit box corner; all other panels up and dark
+    group: Flowie
+    generator: geo
+    params: { shape: corner, restPos: 255 }
+    uiParams:
+      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
+
+  - id: geo-diagonal
+    name: Diagonal
+    desc: N wall up; W and E walls drape diagonally down north→south; the outer stepped edge of the SE staircase sits on the floor — all lit; every other (unlit) panel rests at z=4. Lights in place via stay so lit floor/wall panels hold their exact height (no ±1 relight wobble)
+    group: Flowie
+    generator: geo
+    # restPos 128 ≈ z=4 (unlit panels' rest); exclude notes 70 h(0,0), 86 v(0,0), 87 v(3,0)
+    # stayLight: relight in place via planStay (z-exact) so the lit floor edge stays on z0, not z1
+    params: { shape: diagonal, restPos: 128, stayLight: true, exclude: ["0,0,h", "0,0,v", "3,0,v"] }
+    uiParams:
+      - { key: restPos,   label: rest height, min: 0, max: 255, step: 5 }
+      - { key: stayLight, label: stay to light, type: checkbox }
   # ---- Chase ----------------------------------------------------------------
   - id: chase-top-1
     name: Pattern on top 1
@@ -89,11 +128,17 @@ demos:
       - { key: centerX, label: center x,    min: 0, max: 6,   step: 1 }
       - { key: centerY, label: center y,    min: 0, max: 8,   step: 1 }
 
-  # ---- Lullaby V ------------------------------------------------------------
+  # ---- Prison ------------------------------------------------------------
+  - id: prison
+    name: Prison
+    desc: select a cell (click or type x,y) — Up cages its 4 edges high at z=4 lit while the rest go up and dark; Down starts the cage bob from where it is
+    group: prison
+    interactive: true
+  # ---- Lullaby ------------------------------------------------------------
   - id: lullaby-drop
     name: Drop
-    desc: field rests on the floor; center cell bounces — lit on descent, dark on ascent — each impact ripples a 1-step lift wave outward. Budget-aware — engages only the nearest panels the wire can afford (auto, or cap with max panels)
-    group: Lullaby V
+    desc: field rests on the floor; center cell bounces — lit on descent, dark on ascent — each impact ripples a 1-step lift wave outward. Budget-aware — engages only the nearest panels the wire can afford (auto, or cap with max panels). "Wait for panel" serializes each panel (no new step until its previous move finishes)
+    group: Lullaby
     generator: lullaby-drop
     params:
       floorPos: 0
@@ -103,6 +148,7 @@ demos:
       maxRipplePanels: 0     # 0 = auto (from rateHz + bounce cadence); >0 caps rippled panels
       rippleWindowMs: 0      # 0 = auto (the bounce-cycle time); >0 overrides the budget window
       repeats: 0            # number of bounce cycles; 0 = unlimited
+      gated: true          # per-panel move gate: never send a panel a new step mid-motion
       loop: true
     uiParams:
       - { key: dropLo,          label: drop floor,      min: 0,  max: 200,  step: 5  }
@@ -110,11 +156,12 @@ demos:
       - { key: rippleInterval,  label: ripple ms/cell,  min: 50, max: 5000, step: 25 }
       - { key: maxRipplePanels, label: max panels (0=auto), min: 0, max: 90, step: 1 }
       - { key: repeats,         label: repeats (0=inf), min: 0,  max: 20,   step: 1  }
+      - { key: gated,           label: wait for panel,  type: checkbox }
 
   - id: particles
     name: Particles
-    desc: N particles spiral through a static elastic structure, rippling each panel as they pass — spiral out from center or in from periphery
-    group: Lullaby V
+    desc: N particles spiral through a static elastic structure, lifting + lighting each panel as they pass and holding it lit for a set time — spiral out from center or in from periphery. Trail length = hold ÷ step (a hold 4× the step ms keeps ~4 panels lit behind each particle)
+    group: Lullaby
     generator: particles
     params:
       n: 2
@@ -125,71 +172,26 @@ demos:
       topPos: 255
       speed: 300
       rippleSize: 0.08
-      rippleFadeout: 0.8
+      holdMs: 800
       oppose: 0
-      fadeIn: 0
       loop: true
     uiParams:
       - { key: n,               label: particles,     min: 1,    max: 8,    step: 1    }
       - { key: spiralIn, label: spiral in, type: checkbox }
       - { key: oppose,  label: oppose,   type: checkbox }
-      - { key: fadeIn,  label: fade in,  type: checkbox }
       - { key: structureHeight, label: center height, min: 0,    max: 255,  step: 5    }
       - { key: elasticity,      label: elasticity,    min: 0,    max: 1,    step: 0.05 }
       - { key: speed,           label: step ms,       min: 50,   max: 2000, step: 25   }
       - { key: rippleSize,      label: ripple size,   min: 0.01, max: 0.5,  step: 0.01 }
-      - { key: rippleFadeout,   label: fadeout (s),   min: 0.1,  max: 5,    step: 0.1  }
+      - { key: holdMs,          label: trail hold ms, min: 50,   max: 5000, step: 25   }
 
   - id: lullaby-float
     name: Float
     desc: center cell bounces lo↔hi at global speed, always lit; surrounding panels elastically follow — closer = deeper pull, further = dimmer; brightness tracks position live
-    group: Lullaby V
+    group: Lullaby
     interactive: true
 
-  # ---- Flowie ------------------------------------------------------------
-  - id: geo-corners
-    name: Corners
-    desc: four corner clusters lit at heights that match a perspective box view — back corners high, front corners low; all other panels up and dark
-    group: Flowie
-    generator: geo
-    params: { shape: corners, restPos: 255 }
-    uiParams:
-      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
 
-  - id: geo-faces
-    name: Faces
-    desc: north wall lit high, south stepped wall lit low — two opposing box faces at different depths; all other panels up and dark
-    group: Flowie
-    generator: geo
-    params: { shape: faces, restPos: 255 }
-    uiParams:
-      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
-
-  - id: geo-corner
-    name: Corner
-    desc: north wall high + west wall mid — two planes meeting at the NW joint, one lit box corner; all other panels up and dark
-    group: Flowie
-    generator: geo
-    params: { shape: corner, restPos: 255 }
-    uiParams:
-      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
-
-  - id: geo-diagonal
-    name: Diagonal
-    desc: N wall up; W and E walls drape diagonally down north→south; the outer stepped edge of the SE staircase sits on the floor — all lit; every other (unlit) panel rests at z=4
-    group: Flowie
-    generator: geo
-    # restPos 128 ≈ z=4 (unlit panels' rest); exclude notes 70 h(0,0), 86 v(0,0), 87 v(3,0)
-    params: { shape: diagonal, restPos: 128, exclude: ["0,0,h", "0,0,v", "3,0,v"] }
-    uiParams:
-      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
-
-  # ---- Interlude ------------------------------------------------------------
-  - id: prison
-    name: Prison
-    desc: select a cell (click or type x,y) — Up cages its 4 edges high at z=4 lit while the rest go up and dark; Down starts the cage bob from where it is
-    group: interlude
-    interactive: true
 
   # ---- Demos ----------------------------------------------------------------
   - id: wave-ns
