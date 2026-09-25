@@ -14,14 +14,25 @@ function makeEngine(deps = {}) {
   const state = new MazeState(byNote, null);
   const sent = [];
   const offs = [];
+  const wireCbs = [];   // captured { note, onSent } for wire-synced sends
   const midi = {
     enabled: true,
+    logging: false,
     deadNotes: new Set(),
-    sendSteps: (plan) => sent.push(plan),
+    sendSteps: (plan, opts = {}) => {
+      sent.push(plan);
+      if (opts.onSent) wireCbs.push({ note: [...plan.keys()][0], onSent: opts.onSent });
+    },
     sendOff: (notes) => offs.push([...notes]),
   };
   const engine = new MazeEngine(CONFIG, [{ x: 0, y: 0, orient: 'h' }], { state, midi, ...deps });
-  return { engine, state, sent, offs };
+  // Simulate the transport putting a note's steps on the wire (fires the engine's onSent).
+  const fireWire = (note, when = 0) => {
+    for (let i = wireCbs.length - 1; i >= 0; i--) {
+      if (wireCbs[i].note === note) { wireCbs[i].onSent(note, when); return; }
+    }
+  };
+  return { engine, state, sent, offs, fireWire };
 }
 
 const stepsFor = (plan, note) => plan.get(note)?.steps;
@@ -95,50 +106,52 @@ test('dead panels are skipped entirely (no stay, no send)', () => {
   assert.equal(offs.length, 0);
 });
 
-// ---- Per-panel move gate (serializeMoves) -----------------------------------
+// ---- Wire-synced moves (syncToWire) -----------------------------------------
 
-test('gate OFF (default): back-to-back moves to the same panel both send immediately', () => {
-  const { engine, sent } = makeEngine();
+test('syncToWire OFF (default): back-to-back moves to the same panel both send + commit immediately', () => {
+  const { engine, state, sent } = makeEngine();
   engine.move(0, 0, 'h', 96, 1);   // z0 -> z3
   engine.move(0, 0, 'h', 0, 1);    // immediate second move — no gate
-  assert.equal(sent.length, 2, 'both sends go out with the gate off');
+  assert.equal(sent.length, 2, 'both sends go out with wire-sync off');
+  assert.equal(state.get(60).z, 0, 'committed immediately, back at floor');
 });
 
-test('gate ON: a move to a still-travelling panel is deferred (no MIDI) until it finishes', () => {
+test('syncToWire ON: belief commits only on the wire callback; a busy panel queues (no send)', () => {
   let t = 0;
-  const { engine, state, sent } = makeEngine({ now: () => t });
-  engine.serializeMoves = true;
+  const { engine, state, sent, fireWire } = makeEngine({ now: () => t });
+  engine.syncToWire = true;
 
-  engine.move(0, 0, 'h', 96, 1);   // z0 -> z3: dispatches now, marks the panel busy
-  assert.equal(sent.length, 1, 'first move dispatches');
-  assert.ok(engine._busyUntil.get(60) > 0, 'panel marked busy for its travel time');
+  engine.move(0, 0, 'h', 96, 1);   // z0 -> z3: dispatched to the wire, NOT committed yet
+  assert.equal(sent.length, 1, 'first move dispatched');
+  assert.equal(state.get(60).z, 0, 'belief holds until the wire actually sends');
+  assert.ok(engine._awaitingWire.has(60), 'awaiting the wire callback');
 
-  engine.move(0, 0, 'h', 0, 1);    // new target while busy -> deferred, nothing on the wire
-  assert.equal(sent.length, 1, 'second move is held, not sent');
-  assert.equal(engine._pending.get(60).target, 0, 'latest target is pending');
+  engine.move(0, 0, 'h', 0, 1);    // panel busy -> FIFO-queued, nothing on the wire
+  assert.equal(sent.length, 1, 'second move queued, not sent');
+  assert.equal(engine._moveQueue.get(60).length, 1, 'queued in FIFO');
 
-  engine.tick(0);                  // still busy -> stays pending
-  assert.equal(sent.length, 1, 'tick before travel ends does not dispatch');
-
-  t += 1e6;                        // travel long finished
-  engine.tick(0);                  // drain: panel is free -> pending dispatches
-  assert.equal(sent.length, 2, 'pending move dispatched once the panel is free');
-  assert.equal(engine._pending.has(60), false, 'pending cleared');
-  assert.equal(state.get(60).z, 0, 'belief reflects the drained move (z back to 0)');
+  fireWire(60);                    // transport reports the steps hit the wire (real move-start)
+  assert.equal(state.get(60).z, 3, 'belief commits on the wire callback');
+  assert.ok(engine._busyUntil.get(60) > 0, 'travel clock armed from the send');
 });
 
-test('gate ON: only the latest deferred target survives (latest-wins)', () => {
+test('syncToWire ON: move-end drains the FIFO in order and fires onPanelDone', () => {
   let t = 0;
-  const { engine, state, sent } = makeEngine({ now: () => t });
-  engine.serializeMoves = true;
+  const done = [];
+  const { engine, state, sent, fireWire } = makeEngine({ now: () => t });
+  engine.syncToWire = true;
+  engine.onPanelDone = (n) => done.push(n);
 
-  engine.move(0, 0, 'h', 255, 1);  // z0 -> z8: dispatches, busy
-  engine.move(0, 0, 'h', 64, 1);   // deferred
-  engine.move(0, 0, 'h', 128, 1);  // replaces the earlier pending
-  assert.equal(engine._pending.get(60).target, 128, 'newest target wins');
+  engine.move(0, 0, 'h', 255, 1);  // z0 -> z8: dispatched
+  engine.move(0, 0, 'h', 0, 1);    // queued (return to floor)
+  fireWire(60);                    // commit z8, arm the travel clock
+  assert.equal(state.get(60).z, 8, 'first move committed on its wire send');
 
-  t += 1e6;
-  engine.tick(0);
-  assert.equal(sent.length, 2, 'exactly one deferred move dispatched');
-  assert.equal(state.get(60).z, 4, 'landed at the latest target (posToZ(128)=4)');
+  t += 1e6; engine.tick(0);        // move-end: done fires, queued move dispatches
+  assert.deepEqual(done, [60], 'onPanelDone fired at move-end');
+  assert.equal(sent.length, 2, 'queued move dispatched only after the first finished');
+  assert.ok(engine._awaitingWire.has(60), 'the drained move now awaits its own wire send');
+
+  fireWire(60);                    // commit the second (z8 -> z0)
+  assert.equal(state.get(60).z, 0, 'landed at the queued target, in order');
 });

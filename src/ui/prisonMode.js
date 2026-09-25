@@ -141,11 +141,11 @@ export class PrisonMode {
   setActive(on) {
     if (on === this._active) return;    // idempotent
     this._active = on;
-    // Per-panel move gate: while Prison is live, never send a panel a new step until its previous
-    // move's travel has finished (the bob already waits on sim `moving`; this enforces it at the
-    // belief/wire level too). Reset when the controls close so timeline movements start ungated.
-    this.engine.serializeMoves = on;
-    if (!on) this._release();           // closing the controls stops the bob and frees the cage
+    // Wire-synced moves: while Prison is live, a panel's belief/animation commit on the real wire
+    // send and its next move waits until move-end (the bob already waits on sim `moving`; this makes
+    // that truthful and enforces it at the wire level too). Reset when the controls close.
+    this.engine.syncToWire = on;
+    if (!on) { this._release(); this.engine.resetWireGate?.(); } // stop the bob, free the cage, drop gate state
     // Turning on does NOT move anything — wait for the operator to select and press Up/Down.
   }
 

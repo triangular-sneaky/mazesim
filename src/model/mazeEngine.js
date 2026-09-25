@@ -1,5 +1,6 @@
 import { PanelEngine } from './engine.js';
 import { planMove, planStay, applyStep, posToZ, zToPos, brightToVel } from './mazeState.js';
+import { logEvent } from '../eventLog.js';
 
 /**
  * MazeEngine — the state-backed engine adapter.
@@ -36,20 +37,24 @@ export class MazeEngine extends PanelEngine {
     // key "x,y,orient" -> note number, so the sim-facing action API can reach the belief.
     this._noteOf = new Map(state.list().map((p) => [`${p.x},${p.y},${p.orient}`, p.note]));
 
-    // ---- Per-panel move gate (opt-in) ----------------------------------------
+    // ---- Wire-synced moves (opt-in per movement) -----------------------------
     // Hardware truth: a panel takes a real note-on burst reliably, but sending it a NEW move while
-    // it's still physically travelling corrupts the firmware's step count. When `serializeMoves` is
-    // on, at most one move is in flight per panel: a move to a busy panel is DEFERRED (latest-wins)
-    // and dispatched by tick() once the panel's travel finishes. Off by default (today's behavior).
-    this.serializeMoves = false;
+    // it's still physically travelling corrupts the firmware's step count. When `syncToWire` is on,
+    // a move is only committed + animated when the TRANSPORT actually puts its note-ons on the wire
+    // (past the token bucket) — the real move-start — so belief/sim track the physical panel, and
+    // the next move for that panel waits until move-end (send time + travel). A move to a busy panel
+    // is queued FIFO. Off by default (today's immediate behavior).
+    this.syncToWire = false;
+    this.onPanelDone = null;     // optional (note) => void, fired when a panel's move completes
     // In-place relight strategy (per-movement). Default: a cheap 1-step pulse — but a note-on always
     // steps, so it wobbles the panel one level (floor +1, top −1). Set true to relight via planStay
     // (walk to the near wall and back → z preserved exactly) for precise static shapes; costs up to
     // 16 steps. Set per play() from the movement's `stayLight` param.
     this.stayLight = false;
     this._now = now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
-    this._busyUntil = new Map(); // note -> ms timestamp the current move should finish
-    this._pending   = new Map(); // note -> latest deferred { x, y, orient, target, brightness, duration }
+    this._awaitingWire = new Map(); // note -> outcome { newState, onVel, fromZ } (sent, awaiting wire)
+    this._busyUntil    = new Map(); // note -> ms timestamp the committed move should finish
+    this._moveQueue    = new Map(); // note -> [{ x, y, orient, target, brightness, duration }] FIFO
   }
 
   noteAt(x, y, orient) { return this._noteOf.get(`${x},${y},${orient}`); }
@@ -81,13 +86,35 @@ export class MazeEngine extends PanelEngine {
     const p = this.state.get(note);
     if (!p || p.dead) return false;
 
-    // Gate: if this panel's previous move is still travelling, defer (latest target wins). tick()
-    // re-dispatches it once the panel is free — so we never send a panel a step mid-motion.
-    if (this.serializeMoves && this._now() < (this._busyUntil.get(note) ?? 0)) {
-      this._pending.set(note, { x, y, orient, target, brightness, duration });
+    // Wire-synced: while this panel is still busy (dispatched-awaiting-wire, or committed-travelling),
+    // queue this request FIFO — the panel's move-end (tick) dispatches the next in order. A backlog
+    // means the movement is over-driving the panel faster than it can travel: warn.
+    if (this.syncToWire && this._isBusy(note)) {
+      let q = this._moveQueue.get(note);
+      if (!q) { q = []; this._moveQueue.set(note, q); }
+      q.push({ x, y, orient, target, brightness, duration });
+      if (q.length > 1) logEvent('warn', `move gate: note ${note} queue backed up (${q.length}) — over-driving`);
       return true;
     }
+    return this._dispatch({ x, y, orient, target, brightness, duration });
+  }
 
+  /** True while a wire-synced panel has a move in flight (sent-awaiting-wire or still travelling). */
+  _isBusy(note) {
+    return this._awaitingWire.has(note) || this._now() < (this._busyUntil.get(note) ?? 0);
+  }
+
+  /**
+   * Plan + emit one move for a panel (planning lazily from CURRENT belief, so a queued move reflects
+   * the prior move's outcome). In wire-synced mode belief is committed on the transport's `onSent`
+   * callback (the real move-start), not here — so belief and the sim glide track the physical panel.
+   */
+  _dispatch(req) {
+    const { x, y, orient, target, brightness, duration } = req;
+    const note = this.noteAt(x, y, orient);
+    if (note == null) return false;
+    const p = this.state.get(note);
+    if (!p || p.dead) return false;
     const key = `${x},${y},${orient}`;
     this._clearOff(key);
 
@@ -96,25 +123,18 @@ export class MazeEngine extends PanelEngine {
     const keepLight = brightness == null;
     const onVel = keepLight ? p.brightness : brightToVel(brightness); // 0..127
     const { steps, newState } = planMove(p.z, p.v, zT);
+    const synced = this.syncToWire;
 
     if (steps > 0) {
       // Real move — the note-ons carry the light (min vel 1 so an off panel can still travel).
-      if (this.midi?.enabled) this.midi.sendSteps(new Map([[note, { steps, vel: Math.max(1, onVel) }]]));
-      this.state.commit(note, newState, onVel);
-      this._markBusy(note, fromZ, newState.z);
+      this._send(note, { steps, vel: Math.max(1, onVel) }, synced, fromZ, newState, onVel);
     } else if (!keepLight && onVel !== p.brightness) {
-      // Same height, but the light must change.
       if (onVel > 0) {
-        // Turn on / change level in place, since light can only ride a note-on. Two strategies:
-        //  - pulse (default): one note-on — cheap, but wobbles the panel a level (floor +1, top −1).
-        //  - stay: walk to the near wall and back (planStay) → same z exactly, up to 16 steps — for
-        //    precise static shapes (e.g. Flowie Diagonal) where the ±1 wobble is wrong.
+        // Relight in place. pulse (default) = one note-on (±1 wobble); stay = planStay (z-exact).
         const relight = this.stayLight ? planStay(p.z, p.v) : { steps: 1, newState: applyStep({ z: p.z, v: p.v }) };
-        if (this.midi?.enabled) this.midi.sendSteps(new Map([[note, { steps: relight.steps, vel: onVel }]]));
-        this.state.commit(note, relight.newState, onVel);
-        this._markBusy(note, fromZ, relight.newState.z);
+        this._send(note, { steps: relight.steps, vel: onVel }, synced, fromZ, relight.newState, onVel);
       } else {
-        // Turn off in place — a bare note-off, no movement (no travel → no busy).
+        // Turn off in place — a bare note-off, no movement (no travel → not gated, commit now).
         if (this.midi?.enabled) this.midi.sendOff([note]);
         this.state.setBrightness(note, 0);
       }
@@ -127,23 +147,58 @@ export class MazeEngine extends PanelEngine {
     return true;
   }
 
-  /** Mark a panel busy for the net-displacement glide time (only matters while serializing). */
-  _markBusy(note, fromZ, toZ) {
-    if (!this.serializeMoves) return;
-    const rate = this.speed * (1 - this.ease); // effective units/sec — same as sweepTo()
-    const travelMs = rate > 0 ? (Math.abs(zToPos(toZ) - zToPos(fromZ)) / rate) * 1000 : 0;
-    this._busyUntil.set(note, this._now() + travelMs);
+  /**
+   * Emit `spec` steps for a note. Synced: defer the belief commit to the wire `onSent` callback and
+   * record the outcome as awaiting-wire. Unsynced: commit immediately (today's behavior).
+   */
+  _send(note, spec, synced, fromZ, newState, onVel) {
+    // Investigation aid: every dispatched move logs its actual belief transition + step count when
+    // MIDI logging is on — e.g. "note 60: z1→5 (4 steps)" reveals a move started from z1, not z0.
+    if (this.midi?.logging) logEvent('midi', `note ${note}: z${fromZ}→${newState.z} (${spec.steps} step${spec.steps === 1 ? '' : 's'}, vel ${spec.vel})`);
+    if (synced) {
+      this._awaitingWire.set(note, { newState, onVel, fromZ });
+      if (this.midi?.enabled) {
+        this.midi.sendSteps(new Map([[note, spec]]), { onSent: (n, when) => this._onWireSent(n, when) });
+      } else {
+        // No wire to call back — behave as if sent instantly so belief/gate still advance.
+        this._onWireSent(note, this._now());
+      }
+    } else {
+      if (this.midi?.enabled) this.midi.sendSteps(new Map([[note, spec]]));
+      this.state.commit(note, newState, onVel);
+    }
   }
 
-  /** Light off in place — the one standalone light action: a bare note-off (no move) + belief dark. */
+  /** Transport reports a note's steps just hit the wire (real move-start): commit + arm move-end. */
+  _onWireSent(note) {
+    const out = this._awaitingWire.get(note);
+    if (!out) return;
+    this._awaitingWire.delete(note);
+    this.state.commit(note, out.newState, out.onVel); // sim glides from here → synced to the panel
+    const rate = this.speed * (1 - this.ease);        // effective units/sec — same as sweepTo()
+    const travelMs = rate > 0 ? (Math.abs(zToPos(out.newState.z) - zToPos(out.fromZ)) / rate) * 1000 : 0;
+    this._busyUntil.set(note, this._now() + travelMs);
+    if (this.midi?.logging) logEvent('midi', `note ${note} sent → z${out.fromZ}→${out.newState.z}, ~${Math.round(travelMs)}ms`);
+  }
+
+  /**
+   * Light off in place — the one standalone light action: a bare note-off (no move) + belief dark.
+   * A light-off is NEVER gated by the wire-sync move gate and never waits for a move to end (it
+   * carries no travel), so e.g. a `duration` auto-off fires immediately even mid-move. It also
+   * doesn't disturb the panel's queued moves. If a lit move is still awaiting the wire, cancel its
+   * pending re-light (so the deferred commit lands dark) and still emit the note-off, since belief
+   * brightness hasn't caught up yet.
+   */
   off(x, y, orient) {
     const note = this.noteAt(x, y, orient);
     if (note == null) return false;
     this._clearOff(`${x},${y},${orient}`);
-    this._pending.delete(note); // a deliberate light-off supersedes any queued move
+    const pending = this._awaitingWire.get(note); // a lit move dispatched but not yet on the wire
     const p = this.state.get(note);
     if (!p) return false;
-    if (!p.dead && p.brightness > 0 && this.midi?.enabled) this.midi.sendOff([note]);
+    const wasLit = p.brightness > 0 || (pending && pending.onVel > 0);
+    if (pending) pending.onVel = 0;               // its deferred commit must not re-light after this
+    if (!p.dead && wasLit && this.midi?.enabled) this.midi.sendOff([note]);
     this.state.setBrightness(note, 0);
     return true;
   }
@@ -185,20 +240,34 @@ export class MazeEngine extends PanelEngine {
     return super.movePanel(x, y, orient, targetPosition, opts);
   }
 
-  // ---- Clock: advance sim, then drain any panels whose move has finished ------
+  /** Drop all wire-gate bookkeeping — call on Stop, since flushed sends never fire their onSent
+   *  callback, which would otherwise leave a panel wrongly marked busy on the next synced run. */
+  resetWireGate() {
+    this._awaitingWire.clear();
+    this._busyUntil.clear();
+    this._moveQueue.clear();
+  }
+
+  // ---- Clock: advance sim, then complete any panel whose move-end has passed -----
 
   tick(dt) {
     super.tick(dt);
-    if (!this.serializeMoves || this._pending.size === 0) return;
+    if (!this.syncToWire || this._busyUntil.size === 0) return;
     const now = this._now();
-    // Snapshot the drainable notes first — re-dispatching sets a fresh busyUntil / may re-defer.
-    const ready = [];
-    for (const [note, req] of this._pending) {
-      if (now >= (this._busyUntil.get(note) ?? 0)) ready.push([note, req]);
+    // Snapshot the notes whose committed travel has finished (and aren't still awaiting the wire).
+    const done = [];
+    for (const [note, until] of this._busyUntil) {
+      if (now >= until && !this._awaitingWire.has(note)) done.push(note);
     }
-    for (const [note, req] of ready) {
-      this._pending.delete(note);
-      this.move(req.x, req.y, req.orient, req.target, req.brightness, req.duration);
+    for (const note of done) {
+      this._busyUntil.delete(note);
+      if (this.onPanelDone) { try { this.onPanelDone(note); } catch (e) { console.error(e); } }
+      const q = this._moveQueue.get(note);          // dispatch this panel's next queued move, in order
+      if (q && q.length) {
+        const req = q.shift();
+        if (!q.length) this._moveQueue.delete(note);
+        this._dispatch(req);
+      }
     }
   }
 }

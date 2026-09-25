@@ -37,6 +37,8 @@
  * `sendSteps`/`sendOff` are paced through the shared token bucket; `driveTest` uses exact
  * timestamps (bypasses the bucket). `deadNotes` is a hard send-ban kept in sync with dead panels.
  */
+import { logEvent } from '../eventLog.js';
+
 const MIDI_SETTINGS_KEY = 'mazeMidi.settings.v1';
 
 export class MazeMidiController {
@@ -138,12 +140,12 @@ export class MazeMidiController {
       const all = [];
       for (let r = 0; r < rounds; r++)
         for (const [note, vel] of entries) all.push(msgOf(note, vel, r));
-      units.push(all);
+      units.push({ msgs: all });
     } else {
       for (const [note, vel] of entries) {
         const u = [];
         for (let r = 0; r < rounds; r++) u.push(msgOf(note, vel, r));
-        units.push(u);
+        units.push({ msgs: u, note });
       }
     }
 
@@ -160,10 +162,13 @@ export class MazeMidiController {
    * planner (mazeState.js) decides `steps`, this just puts them on the wire under the
    * same guards as `move()`.
    * @param {Map<number, {steps:number, vel:number}>} plan  note → {steps, vel (1..127)}
+   * @param {{onSent?: (note:number, whenMs:number) => void}} [opts]  onSent fires when a note's unit
+   *        is actually put on the wire (post-throttle) — the real move-start (wire-synced moves).
    */
-  sendSteps(plan) {
+  sendSteps(plan, opts = {}) {
     const out = this._output();
     if (!out) { this._setStatus('no MIDI output selected', false); return false; }
+    const onSent = opts.onSent;
 
     const units = [];
     let lo = Infinity, hi = -Infinity, noteCount = 0, totalSteps = 0;
@@ -176,7 +181,7 @@ export class MazeMidiController {
       const vel = Math.max(1, Math.min(127, spec?.vel | 0));
       const u = [];
       for (let s = 0; s < steps; s++) { u.push([0x80, note, 0]); u.push([0x90, note, vel]); }
-      units.push(u);
+      units.push({ msgs: u, note, onSent });
       lo = Math.min(lo, note); hi = Math.max(hi, note);
       noteCount++; totalSteps += steps;
     }
@@ -196,7 +201,7 @@ export class MazeMidiController {
     for (const raw of notes) {
       const note = raw | 0;
       if (note < 0 || note > 127 || this.deadNotes.has(note)) continue;
-      units.push([[0x80, note, 0]]);
+      units.push({ msgs: [[0x80, note, 0]], note });
     }
     if (!units.length) { this._setStatus('nothing to turn off', false); return false; }
     return this._enqueue(out, units, `${units.length} notes off (no move)`, units.length);
@@ -212,7 +217,7 @@ export class MazeMidiController {
   _enqueue(out, units, label, noteCount) {
     this._out = out;                               // most recent output wins for the drain
     for (const u of units) this._queue.push(u);
-    const added = units.reduce((n, u) => n + u.length, 0);
+    const added = units.reduce((n, u) => n + u.msgs.length, 0);
     this._setStatus(`queued ${this._queue.length} units · ${label}…`, true);
     if (this._activityEl) this._activityEl.textContent = `${noteCount} notes → +${added} msgs`;
     if (!this._draining) { this._draining = true; this._pump(); }
@@ -243,7 +248,7 @@ export class MazeMidiController {
     this._lastRefill = now;
 
     const unit = this._queue[0];
-    const cost = unit.length;
+    const cost = unit.msgs.length;
     const need = Math.min(cost, cap);              // waiting past a full bucket never helps
     if (this._tokens < need) {
       const waitMs = Math.ceil((need - this._tokens) / rate * 1000);
@@ -253,8 +258,11 @@ export class MazeMidiController {
 
     this._queue.shift();
     let when = now + 1;                            // tiny lead so all sends are scheduled
-    for (const m of unit) { this._emit(out, m, when); when += step; }
+    let whenLast = when;
+    for (const m of unit.msgs) { this._emit(out, m, when); whenLast = when; when += step; }
     this._tokens -= cost;
+    // Report the real send time (post-throttle) so the engine can sync belief/animation to it.
+    if (unit.onSent) { try { unit.onSent(unit.note, whenLast); } catch (e) { console.error(e); } }
 
     const unitDur = Math.max(1, cost * step);      // wall time this unit occupies the wire
     this._pumpTimer = this._schedule(() => this._pump(), unitDur);
@@ -293,6 +301,7 @@ export class MazeMidiController {
   /** Kill every light: one note-off (0x80) per note 0–127. No movement. First stops all
    *  movements (via onPanic) so nothing re-drives the maze right after. */
   panic() {
+    logEvent('warn', 'PANIC — all lights off (note-off 0–127)');
     if (this.onPanic) { try { this.onPanic(); } catch (e) { console.error(e); } }
     this._cancel();                                // stop any in-flight move
     const out = this._output();
@@ -427,6 +436,7 @@ export class MazeMidiController {
   enable(on) {
     if (on === this.enabled) return;
     this.enabled = on;
+    logEvent('info', on ? 'MIDI output enabled' : 'MIDI output disabled');
     this._enableBtn.textContent = on ? 'Disable output' : 'Enable output';
     this._enableBtn.classList.toggle('primary', on);
     if (on) this._ensureMidi();

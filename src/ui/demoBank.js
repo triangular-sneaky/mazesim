@@ -21,6 +21,13 @@
  * @param {Object<string, {el: HTMLElement, setActive: (on:boolean)=>void}>} [opts.controllers]
  *   controllers for interactive movements, keyed by movement id.
  */
+import { logEvent } from '../eventLog.js';
+
+// Injected into every timeline movement's params so the wire-sync gate is exposed everywhere
+// (commit/animate on the real send + wait for each panel's move-end). Movements opt into ON by
+// default with `syncToWire: true` in their config params; others start off.
+const SYNC_SPEC = { key: 'syncToWire', label: 'sync to wire', type: 'checkbox' };
+
 export class DemoBank {
   constructor(listEl, demos, player, opts = {}) {
     this.listEl = listEl;
@@ -39,6 +46,8 @@ export class DemoBank {
     this._open = new Set();       // interactive movement ids with controls expanded
     this._openParams = new Set(); // ids with param editor expanded
     this._liveParams = new Map(); // id -> current param values (user-editable copy)
+    this._paramsTimer = null;
+    this._loadParams();           // restore edited movement params from a previous session
 
     if (this.searchEl) {
       this.searchEl.addEventListener('input', () => {
@@ -49,12 +58,31 @@ export class DemoBank {
     this._render();
   }
 
-  /** Return the live (user-editable) params for a demo, initialised from its config. */
+  /** Return the live (user-editable) params for a demo, initialised from its config (+ persisted). */
   _getParams(demo) {
     if (!this._liveParams.has(demo.id)) {
-      this._liveParams.set(demo.id, { ...(demo.params || {}) });
+      this._liveParams.set(demo.id, { ...(demo.params || {}), ...(this._persisted?.[demo.id] || {}) });
     }
     return this._liveParams.get(demo.id);
+  }
+
+  /** Load persisted per-movement param overrides (applied over each demo's config defaults). */
+  _loadParams() {
+    if (typeof localStorage === 'undefined') return;
+    try { this._persisted = JSON.parse(localStorage.getItem('demoBank.params.v1') || 'null') || {}; }
+    catch { this._persisted = {}; }
+  }
+
+  /** Debounced save of all edited movement params (a map of id -> params). */
+  _saveParams() {
+    if (typeof localStorage === 'undefined') return;
+    if (this._paramsTimer) clearTimeout(this._paramsTimer);
+    this._paramsTimer = setTimeout(() => {
+      const blob = {};
+      for (const [id, p] of this._liveParams) blob[id] = p;
+      try { localStorage.setItem('demoBank.params.v1', JSON.stringify(blob)); }
+      catch { /* quota / disabled — best effort */ }
+    }, 300);
   }
 
   /** Group movements by their `group` field (default "Demos"), preserving order. */
@@ -114,8 +142,28 @@ export class DemoBank {
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = !!(liveP[spec.key] ?? 0);
-      cb.addEventListener('change', () => { liveP[spec.key] = cb.checked ? 1 : 0; });
+      cb.addEventListener('change', () => { liveP[spec.key] = cb.checked ? 1 : 0; this._saveParams(); });
       row.append(label, cb);
+      return row;
+    }
+
+    if (spec.type === 'select') {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const label = document.createElement('label');
+      label.textContent = spec.label;
+      const sel = document.createElement('select');
+      sel.style.cssText = 'flex:1;width:auto';
+      const cur = liveP[spec.key] ?? spec.options?.[0]?.value ?? spec.options?.[0];
+      for (const opt of spec.options || []) {
+        const value = opt.value ?? opt, text = opt.label ?? String(value);
+        const o = document.createElement('option');
+        o.value = value; o.textContent = text;
+        if (value === cur) o.selected = true;
+        sel.append(o);
+      }
+      sel.addEventListener('change', () => { liveP[spec.key] = sel.value; this._saveParams(); });
+      row.append(label, sel);
       return row;
     }
 
@@ -149,6 +197,7 @@ export class DemoBank {
       const num = parseFloat(input.value);
       liveP[spec.key] = num;
       display.value = fmt(num);
+      this._saveParams();
     });
 
     display.addEventListener('change', () => {
@@ -157,6 +206,7 @@ export class DemoBank {
       liveP[spec.key] = num;
       display.value = fmt(num);
       input.value = num;
+      this._saveParams();
     });
 
     return row;
@@ -258,9 +308,10 @@ export class DemoBank {
             this.listEl.append(box);
           }
         } else {
-          const hasUi = Array.isArray(demo.uiParams) && demo.uiParams.length > 0;
-          const paramsOpen = hasUi && this._openParams.has(demo.id);
-          const liveP = hasUi ? this._getParams(demo) : (demo.params || {});
+          // Every timeline movement gets a params panel with at least the sync-to-wire checkbox.
+          const uiParams = [...(demo.uiParams || []), SYNC_SPEC];
+          const paramsOpen = this._openParams.has(demo.id);
+          const liveP = this._getParams(demo);
 
           // One movement active at a time: the running timeline's button is Stop; starting
           // a movement closes any open interactive controller (reconciled below).
@@ -272,33 +323,31 @@ export class DemoBank {
             if (this.player.isRunning() === demo.id) {
               this.player.stop();
               this._haltTransport();  // drop any queued sends so the maze stops now
+              logEvent('info', `⏹ stopped ${demo.name}`);
             } else {
               this.onManual?.();
               this._open.clear();     // close any open interactive controller — one active at a time
               this._haltTransport();  // clear the previous movement's queued sends before the new one
               this.player.play({ ...demo, params: liveP });
+              logEvent('info', `▶ ${demo.name}`);
             }
             this._render();
           });
 
-          if (hasUi) {
-            const gearBtn = document.createElement('button');
-            gearBtn.textContent = '⚙';
-            gearBtn.title = 'Edit parameters';
-            gearBtn.style.cssText = 'padding:5px 7px;flex:none';
-            gearBtn.classList.toggle('primary', paramsOpen);
-            gearBtn.addEventListener('click', () => this._toggleParams(demo.id));
-            row.append(info, gearBtn, playBtn);
-          } else {
-            row.append(info, playBtn);
-          }
+          const gearBtn = document.createElement('button');
+          gearBtn.textContent = '⚙';
+          gearBtn.title = 'Edit parameters';
+          gearBtn.style.cssText = 'padding:5px 7px;flex:none';
+          gearBtn.classList.toggle('primary', paramsOpen);
+          gearBtn.addEventListener('click', () => this._toggleParams(demo.id));
+          row.append(info, gearBtn, playBtn);
 
           this.listEl.append(row);
 
           if (paramsOpen) {
             const form = document.createElement('div');
             form.className = 'demo-controls';
-            for (const spec of demo.uiParams) {
+            for (const spec of uiParams) {
               form.append(this._paramRow(spec, liveP));
             }
             this.listEl.append(form);
@@ -334,6 +383,7 @@ export class DemoBank {
   /** Stop every movement: halt the timeline player, close any interactive controller, and drop
    *  any MIDI still queued in the transport so the maze stops immediately (not after the backlog). */
   stopAll() {
+    if (this.player.isRunning() || this._open.size) logEvent('info', '⏹ stop all');
     this._open.clear();
     this.player.stop();
     this._haltTransport();

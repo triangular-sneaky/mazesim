@@ -11,6 +11,7 @@ import { CellBoard } from './ui/cellBoard.js';
 import { DemoBank } from './ui/demoBank.js';
 import { PrisonMode } from './ui/prisonMode.js';
 import { LullabyFloat } from './ui/lullabyFloat.js';
+import { BlanketMode } from './ui/blanketMode.js';
 import { MidiMode } from './ui/midiMode.js';
 import { MazeMidiController } from './ui/mazeMidiController.js';
 import { VideoMode } from './ui/videoMode.js';
@@ -203,6 +204,7 @@ function main() {
     // Interactive movements (live controllers instead of timelines), keyed by movement id.
     const prison = new PrisonMode(engine, cells, config);
     const lullabyFloat = new LullabyFloat(engine);
+    const blanket = new BlanketMode(engine, cells);
     const midi = new MidiMode(engine, { player });
 
     // Mount MIDI as a persistent sidebar section — not a movement.
@@ -222,7 +224,7 @@ function main() {
       onManual: stopCycle,
       onCycle: startCycle,
       searchEl: document.getElementById('move-search'),
-      controllers: { prison, 'lullaby-float': lullabyFloat },
+      controllers: { prison, 'lullaby-float': lullabyFloat, blanket },
       engine,
       collapseAll: true, // all groups start collapsed; user expands as needed
     });

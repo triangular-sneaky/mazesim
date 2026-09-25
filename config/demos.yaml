@@ -135,9 +135,15 @@ demos:
     group: prison
     interactive: true
   # ---- Lullaby ------------------------------------------------------------
+  - id: blanket
+    name: Blanket
+    desc: select to reveal three buttons — Blanket lays the field on the floor as a concentric wave from the outside in (~10% dimly lit at 30%, drop cell lifted to z2), then fades all lights in the same order; Flat lowers the central 4 (drop-cell) edges back to the floor; Moon raises panel 88 to z6 at full brightness
+    group: Lullaby
+    interactive: true
+
   - id: lullaby-drop
     name: Drop
-    desc: field rests on the floor; center cell bounces — lit on descent, dark on ascent — each impact ripples a 1-step lift wave outward. Budget-aware — engages only the nearest panels the wire can afford (auto, or cap with max panels). "Wait for panel" serializes each panel (no new step until its previous move finishes)
+    desc: field rests on the floor; center cell bounces — lit on descent, dark on ascent — each impact ripples a 1-step lift wave outward. Budget-aware — engages only the nearest panels the wire can afford (auto, or cap with max panels). "Sync to wire" commits/animates each panel on the real send and holds its next step until the move ends
     group: Lullaby
     generator: lullaby-drop
     params:
@@ -147,20 +153,23 @@ demos:
       rippleInterval: 400
       maxRipplePanels: 0     # 0 = auto (from rateHz + bounce cadence); >0 caps rippled panels
       rippleWindowMs: 0      # 0 = auto (the bounce-cycle time); >0 overrides the budget window
+      rippleMode: some      # all = every in-scope panel returns (half/half phases); some = sized to fit; none = no return
+      rippleGlowMs: 0       # ripple flash lifetime before the light goes off; 0 = auto (2× ripple ms/cell)
       repeats: 0            # number of bounce cycles; 0 = unlimited
-      gated: true          # per-panel move gate: never send a panel a new step mid-motion
+      syncToWire: true     # wire-synced: commit/animate on the real send; next step waits for move-end
       loop: true
     uiParams:
       - { key: dropLo,          label: drop floor,      min: 0,  max: 200,  step: 5  }
       - { key: dropHeight,      label: drop peak,       min: 50, max: 255,  step: 5  }
       - { key: rippleInterval,  label: ripple ms/cell,  min: 50, max: 5000, step: 25 }
       - { key: maxRipplePanels, label: max panels (0=auto), min: 0, max: 90, step: 1 }
+      - { key: rippleMode,      label: ripple return,   type: select, options: [some, all, none] }
+      - { key: rippleGlowMs,    label: glow ms (0=auto),min: 0,  max: 5000, step: 25 }
       - { key: repeats,         label: repeats (0=inf), min: 0,  max: 20,   step: 1  }
-      - { key: gated,           label: wait for panel,  type: checkbox }
 
   - id: particles
     name: Particles
-    desc: N particles spiral through a static elastic structure, lifting + lighting each panel as they pass and holding it lit for a set time — spiral out from center or in from periphery. Trail length = hold ÷ step (a hold 4× the step ms keeps ~4 panels lit behind each particle)
+    desc: N particles spiral over a static elastic HILL — 0 on every wall, rising to a configurable peak in the middle — lifting + lighting each panel as they pass and holding it lit for a set time. Spiral out from center or in from periphery. Trail length = hold ÷ step (a hold 4× the step ms keeps ~4 panels lit behind each particle)
     group: Lullaby
     generator: particles
     params:
@@ -179,8 +188,8 @@ demos:
       - { key: n,               label: particles,     min: 1,    max: 8,    step: 1    }
       - { key: spiralIn, label: spiral in, type: checkbox }
       - { key: oppose,  label: oppose,   type: checkbox }
-      - { key: structureHeight, label: center height, min: 0,    max: 255,  step: 5    }
-      - { key: elasticity,      label: elasticity,    min: 0,    max: 1,    step: 0.05 }
+      - { key: structureHeight, label: middle height, min: 0,    max: 255,  step: 5    }
+      - { key: elasticity,      label: peak rise,     min: 0,    max: 1,    step: 0.05 }
       - { key: speed,           label: step ms,       min: 50,   max: 2000, step: 25   }
       - { key: rippleSize,      label: ripple size,   min: 0.01, max: 0.5,  step: 0.01 }
       - { key: holdMs,          label: trail hold ms, min: 50,   max: 5000, step: 25   }

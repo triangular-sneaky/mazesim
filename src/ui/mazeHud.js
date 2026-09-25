@@ -323,9 +323,12 @@ export class MazeHud {
     const rawBtn = mkBtn('untracked ×1', () => this._stepRawSelected());
     rawBtn.classList.add('danger');
     rawBtn.title = 'Send one step to the selected panels (MIDI only) without changing tracked belief — to nudge the physical maze back in sync';
+    const offBtn = mkBtn('light off', () => this._lightOffSelected());
+    offBtn.title = 'Turn the selected panels’ lights off — a bare note-off, no movement';
     acts.append(
       mkBtn('step ×1', () => this._stepSelected()),
       rawBtn,
+      offBtn,
       mkBtn(p.dead ? 'revive' : 'mark dead', () => this._toggleDeadSelected()),
     );
     card.append(acts);
@@ -333,7 +336,7 @@ export class MazeHud {
     // A "zv" edit is one field holding `<height><dir>` — e.g. `3+` (z=3, up) or
     // `5-` (z=5, down); `+`=↑, `-`=↓. Editing marks the field dirty (zv*); `go` applies,
     // `dismiss` reverts to the known state. One field replaces the old z-input + flip.
-    const zvRow = (rowLabel, danger, apply) => {
+    const zvRow = (rowLabel, danger, apply, withBright) => {
       const known = zvStr(p.z, p.v);
       const row = document.createElement('div');
       row.className = 'row zv-row';
@@ -358,21 +361,39 @@ export class MazeHud {
       input.addEventListener('input', refreshDirty);
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go.click(); });
 
+      // Optional brightness the move carries (0..127; 0 = travel dark). Defaults to the panel's
+      // current light, or 100 if it's off.
+      let brightInput = null, blab = null;
+      if (withBright) {
+        blab = document.createElement('span');
+        blab.className = 'zvlab'; blab.textContent = 'b';
+        brightInput = document.createElement('input');
+        brightInput.type = 'number'; brightInput.className = 'val'; brightInput.style.width = '44px';
+        brightInput.min = 0; brightInput.max = 127; brightInput.step = 1;
+        brightInput.value = p.brightness > 0 ? p.brightness : 100;
+        brightInput.title = 'brightness 0..127 the move carries (0 = travel dark)';
+      }
+
       const go = mkBtn('go', () => {
         const parsed = parseZv(input.value, p.v);
         if (!parsed) { input.value = known; refreshDirty(); return; } // unparseable → snap back
-        apply(parsed.z, parsed.v);
+        const bright = brightInput
+          ? Math.max(0, Math.min(127, Math.round(Number(brightInput.value) || 0)))
+          : null;
+        apply(parsed.z, parsed.v, bright);
       });
       const dismiss = mkBtn('dismiss', () => { input.value = known; refreshDirty(); });
       if (danger) { go.classList.add('danger'); dismiss.classList.add('danger'); }
 
-      row.append(rl, flab, input, go, dismiss);
+      row.append(rl, flab, input);
+      if (brightInput) row.append(blab, brightInput);
+      row.append(go, dismiss);
       return row;
     };
 
     card.append(
-      // Move — real movement (all selected): walk to (z,v), SEND midi, commit tracked state.
-      zvRow('Move', false, (z, v) => this._moveSelected(z, v)),
+      // Move — real movement (all selected): walk to (z,v) carrying `bright`, SEND midi, commit.
+      zvRow('Move', false, (z, v, bright) => this._moveSelected(z, v, bright), true),
       // Fix — belief correction (all selected): set tracked (z,v) only, NO midi. The real panels
       // don't move, so the 3D mirror snaps there fast (it's a reset, not a movement).
       zvRow('Fix', true, (z, v) => this._fixSelected(z, v)),
@@ -421,20 +442,21 @@ export class MazeHud {
   }
 
   /**
-   * Real movement: walk the panel to exactly (zT,vT) on the bounce circle, SEND the
-   * note-ons, and commit the physically-correct resulting state. Directed (not min-path)
-   * so the operator picks the arrival direction via the zv sign; endpoints normalize v.
+   * Real movement: walk the panel to exactly (zT,vT) on the bounce circle, SEND the note-ons, and
+   * commit the physically-correct resulting state. Directed (not min-path) so the operator picks the
+   * arrival direction via the zv sign; endpoints normalize v. `bright` (0..127, null = keep the
+   * panel's current light) is the level the move carries — the note-ons ride it; 0 travels dark.
    */
-  _moveTo(note, zT, vT) {
+  _moveTo(note, zT, vT, bright = null) {
     const p = this.state.get(note);
     if (!p || p.dead) return;
+    const vel = bright == null ? p.brightness : bright;   // 0..127
     const steps = (aOf(zT, vT) - aOf(p.z, p.v) + CYCLE) % CYCLE;
     const newState = applyN({ z: p.z, v: p.v }, steps);
     if (steps > 0 && this._guard()) {
-      const vel = Math.max(1, p.brightness || 1);
-      this.midi.sendSteps(new Map([[note, { steps, vel }]]));
+      this.midi.sendSteps(new Map([[note, { steps, vel: Math.max(1, vel) }]]));
     }
-    this.state.commit(note, newState, p.brightness);
+    this.state.commit(note, newState, vel);
   }
 
   _step(note) {
@@ -447,9 +469,22 @@ export class MazeHud {
 
   // ---- selection-wide actions (Move / Fix / step / dead affect every selected panel) --------
 
-  /** Real movement of every selected panel to (z,v): SEND midi + commit belief. */
-  _moveSelected(z, v) {
-    for (const note of this.selected) this._moveTo(note, z, v);
+  /** Real movement of every selected panel to (z,v) carrying `bright`: SEND midi + commit belief. */
+  _moveSelected(z, v, bright = null) {
+    for (const note of this.selected) this._moveTo(note, z, v, bright);
+    this._afterChange();
+  }
+
+  /** Light off every selected panel: a bare note-off (no movement) + belief dark. */
+  _lightOffSelected() {
+    const notes = [];
+    for (const note of this.selected) {
+      const p = this.state.get(note);
+      if (!p) continue;
+      if (!p.dead && p.brightness > 0 && this.midi.enabled) notes.push(note);
+      this.state.setBrightness(note, 0);
+    }
+    if (notes.length) this.midi.sendOff(notes);
     this._afterChange();
   }
 

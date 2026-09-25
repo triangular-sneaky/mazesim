@@ -34,7 +34,10 @@ export class DemoPlayer {
     this._triggerTimers = [];
     this._running       = null;
     this._demo          = null;
-    if (this.engine) { this.engine.serializeMoves = false; this.engine.stayLight = false; } // reset per-movement flags
+    if (this.engine) { // reset per-movement flags + drop stale wire-gate state (flushed sends never call back)
+      this.engine.syncToWire = false; this.engine.stayLight = false; this.engine.onPanelDone = null;
+      this.engine.resetWireGate?.();
+    }
   }
 
   isRunning() { return this._running; }
@@ -80,9 +83,10 @@ export class DemoPlayer {
     this._demo    = demo;
     const params  = demo.params || {};
 
-    // Per-panel move gate (opt-in per movement, toggleable in the GUI). Re-read each play/loop so a
-    // live checkbox change takes effect on the next cycle; stop() resets it to off.
-    this.engine.serializeMoves = !!params.gated;
+    // Wire-synced moves (opt-in per movement, toggleable in the GUI): commit/animate on the real
+    // wire send and gate the next move per panel. Re-read each play/loop so a live checkbox change
+    // takes effect on the next cycle; stop() resets it.
+    this.engine.syncToWire = !!params.syncToWire;
     // In-place relight via planStay (z-exact) instead of the 1-step pulse — per movement.
     this.engine.stayLight = !!params.stayLight;
 
@@ -166,11 +170,31 @@ function particlesPlan(engine, params) {
     return Math.hypot(px - ccx, py - ccy);
   }));
 
+  // HILL that is 0 on EVERY wall and peaks in the middle: height tracks how deep a cell sits inside
+  // the maze, not radial distance. Multi-source BFS inward from the boundary — a cell touching the
+  // outside (a missing neighbour or the grid edge) is depth 0; each ring inward is +1.
+  const occ   = new Set(cells.map((c) => `${c.x},${c.y}`));
+  const isOcc = (x, y) => occ.has(`${x},${y}`);
+  const depth = new Map();
+  const queue = [];
+  for (const c of cells) {
+    const onWall = !isOcc(c.x - 1, c.y) || !isOcc(c.x + 1, c.y) || !isOcc(c.x, c.y - 1) || !isOcc(c.x, c.y + 1);
+    if (onWall) { depth.set(`${c.x},${c.y}`, 0); queue.push(c); }
+  }
+  for (let h = 0; h < queue.length; h++) {
+    const c = queue[h], d = depth.get(`${c.x},${c.y}`);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const k = `${c.x + dx},${c.y + dy}`;
+      if (isOcc(c.x + dx, c.y + dy) && !depth.has(k)) { depth.set(k, d + 1); queue.push({ x: c.x + dx, y: c.y + dy }); }
+    }
+  }
+  const maxDepth = Math.max(1, ...depth.values());
+
   const structData = panels.map((p) => {
-    const { px, py } = panelCenter(p.x, p.y, p.orient);
-    const dist    = Math.hypot(px - ccx, py - ccy);
-    const falloff = Math.max(0, 1 - dist / maxDist);
-    const pos     = Math.round(topPos + (structureHeight - topPos) * falloff * elasticity);
+    // Panel height from its cell's depth: 0 on the walls, rising to a peak (structureHeight) in the
+    // middle. `elasticity` scales how far the middle rises (1 = full height, 0 = flat on the floor).
+    const d = depth.get(`${p.x},${p.y}`) ?? 0;
+    const pos = Math.round(structureHeight * elasticity * (d / maxDepth));
     return { p, pos };
   });
   const posOf = new Map(structData.map(({ p, pos }) => [`${p.x},${p.y},${p.orient}`, pos]));
@@ -684,6 +708,15 @@ export const GENERATORS = {
     const otherPanels  = allPanels.filter((p) => !centerKeys.has(`${p.x},${p.y},${p.orient}`));
 
     const rate = engine.speed * (1 - engine.ease);
+    // Ripple mode:
+    //   none — panels lift+flash then note-off; they NEVER travel back (no reversal). We also skip
+    //          the per-cycle settle so the field holds where ripples leave it.
+    //   all  — every in-scope panel (auto/specified count) also RETURNS (no-light move back to the
+    //          floor); the returns are split half/half across two phases of the centre's bounce.
+    //   some — like all, but the two return batches are sized to FIT their phase windows, so they
+    //          finish without backlog (batch on the fall done by impact). Default.
+    const rippleMode = params.rippleMode || 'some';
+    const doReturn = rippleMode !== 'none';
     // "At the floor" is a BELIEF question — the sim render can still be gliding down (it starts at
     // the rest position, not the floor), so check tracked z, not the sim position. If the field
     // already believes it's on the floor, skip the settle and drop right away (settleMs = 0, no
@@ -694,50 +727,59 @@ export const GENERATORS = {
     const alreadyAtFloor = belief
       ? belief.every((bp) => bp.dead || bp.z === floorZ)
       : maxOffFloor < 1;
-    const settleMs = alreadyAtFloor || rate <= 0 ? 0 : (maxOffFloor / rate) * 1000;
+    const wantSettle = doReturn && !alreadyAtFloor && rate > 0;
+    const settleMs = wantSettle ? (maxOffFloor / rate) * 1000 : 0;
     // Center travels floor→peak (risingMs) then peak→dropLo (fallingMs).
     const risingMs  = rate > 0 ? ((dropHeight - floorPos) / rate) * 1000 : 0;
     const fallingMs = rate > 0 ? ((dropHeight - dropLo)   / rate) * 1000 : 0;
-    // Ripple lift = one level up (a genuine 1-step move), lit; returns to the floor after riseMs.
+    // Ripple lift = one level up (a genuine 1-step move), lit.
     const rippleTop = zToPos(posToZ(floorPos) + 1);
-    const riseMs = rate > 0 ? (Math.abs(rippleTop - floorPos) / rate) * 1000 : 0;
+    // Glow lifetime: the lit panel goes dark after this — BEFORE it returns (or as the whole pass,
+    // if it doesn't) — so each pass reads as a brief ripple flash, not a panel lit for the entire
+    // slow travel. Default = 2× the per-cell propagation time.
+    const glowMs = params.rippleGlowMs > 0 ? params.rippleGlowMs : rippleInterval * 2;
 
     const actions = [];
 
     // Phase 0 — settle everything to the floor, lights off. Skipped when the field is already on
     // the floor (settleMs = 0), so the bounce/drop starts right away.
-    if (!alreadyAtFloor) actions.push({ t: 0, run: () => engine.sweepAll(floorPos, { brightness: 0 }) });
+    if (wantSettle) actions.push({ t: 0, run: () => engine.sweepAll(floorPos, { brightness: 0 }) });
 
-    // One bounce + ripple per play (loop: true in params drives continuous repeat).
-    const t0    = settleMs;
-    const tDrop = t0 + risingMs + fallingMs; // moment center hits dropLo
+    // Centre bounce timeline (loop drives continuous repeat):
+    //   t0 .. tFall   rise to the peak (dark) — the windup
+    //   tFall         START OF FALL (centre descends, lit) — the FALL return batch fires here
+    //   tImpact       centre hits dropLo, light off, then BOUNCES back up (dark) — BOUNCE batch fires
     const ccx = centerX + 0.5, ccy = centerY + 0.5;
+    const tFall   = settleMs + risingMs;
+    const tImpact = tFall + fallingMs;
+    const cpTo = (target, brightness) => () =>
+      engine.sweepTo(centerPanels.map((p) => ({ ...p, target })), { brightness });
 
-    // Center rises (dark).
-    actions.push({ t: t0, run: () =>
-      engine.sweepTo(centerPanels.map((p) => ({ ...p, target: dropHeight })), { brightness: 0 }) });
+    actions.push({ t: settleMs, run: cpTo(dropHeight, 0) });                                   // rise (dark)
+    actions.push({ t: tFall,    run: cpTo(dropLo, 1) });                                        // fall (lit)
+    actions.push({ t: tImpact,  run: () => centerPanels.forEach((p) => engine.off(p.x, p.y, p.orient)) }); // impact: light off
+    actions.push({ t: tImpact,  run: cpTo(dropHeight, 0) });                                    // bounce back up (dark)
 
-    // Center descends (lit).
-    actions.push({ t: t0 + risingMs, run: () =>
-      engine.sweepTo(centerPanels.map((p) => ({ ...p, target: dropLo })), { brightness: 1 }) });
-
-    // Floor touch: center light off (stays at dropLo).
-    actions.push({ t: tDrop, run: () => centerPanels.forEach((p) => engine.off(p.x, p.y, p.orient)) });
-
-    // Budget-aware coverage: at ~rateHz/2 steps/s and ~16 steps to lift-and-return one panel near
-    // the floor, only so many fit before the next impact. `maxRipplePanels` overrides the auto
-    // value, and coverage scales up automatically if the wire budget (rateHz) rises.
+    // How many in-scope panels take part, and how the RETURNS split across the two phases. A return
+    // (no-light move back to the floor) costs ~16 steps; at ~rateHz/2 steps/s only so many fit each
+    // phase window. In 'some' each batch is sized to fit its window (fall batch done by impact); in
+    // 'all' the auto/specified count is split half/half. `maxRipplePanels` caps/sets the count.
     const stepsPerSec = Math.max(1, (engine.midi?.rateHz ?? 100) / 2);
-    const windowSec = Math.max(0.001, (params.rippleWindowMs || (settleMs + risingMs + fallingMs)) / 1000);
-    const COST_PER_PANEL = 16; // ~1-step lift + full-cycle return near the floor
-    const auto = Math.floor((stepsPerSec * windowSec) / COST_PER_PANEL);
-    const cap = params.maxRipplePanels > 0 ? params.maxRipplePanels : auto;
-    const affordable = Math.max(1, Math.min(cap, otherPanels.length));
+    const RETURN_COST = 16;
+    const fitFall = Math.max(0, Math.floor(stepsPerSec * (fallingMs / 1000) / RETURN_COST));
+    const fitRise = Math.max(0, Math.floor(stepsPerSec * (risingMs  / 1000) / RETURN_COST));
+    const autoAll = params.maxRipplePanels > 0
+      ? params.maxRipplePanels
+      : Math.floor(stepsPerSec * Math.max(0.001, (params.rippleWindowMs || (risingMs + fallingMs)) / 1000) / RETURN_COST);
+    let nFall, nBounce;                              // fall batch (at tFall), bounce batch (at tImpact)
+    if (rippleMode === 'some') { nFall = fitFall; nBounce = fitRise; }
+    else { const t = Math.max(1, autoAll); nFall = Math.floor(t / 2); nBounce = t - nFall; } // 'all'
+    const total = doReturn
+      ? Math.max(1, Math.min(nFall + nBounce, otherPanels.length))
+      : Math.max(1, Math.min(autoAll, otherPanels.length));            // 'none': count is just the lifts
 
-    // Pick the participants as a UNIFORM SCATTER across the whole field (farthest-point sampling,
-    // seeded at the impact), not the nearest ring — so it reads as sparse ripples spread over the
-    // field by angle and distance, not a dense wave. The rest sit the ripple out. Each still fires
-    // in outward order (by distance), so the sparse points still propagate from the impact.
+    // Participants: a UNIFORM SCATTER across the field (farthest-point sampling, seeded at the impact)
+    // — sparse ripples spread by angle and distance, not a dense wave; the rest sit it out.
     const pts = otherPanels.map((p) => {
       const { px, py } = panelCenter(p.x, p.y, p.orient);
       return { p, px, py, dist: Math.hypot(px - ccx, py - ccy) };
@@ -748,7 +790,7 @@ export const GENERATORS = {
       let seed = 0;
       for (let i = 1; i < pool.length; i++) if (pool[i].dist < pool[seed].dist) seed = i; // nearest impact
       ranked.push(pool.splice(seed, 1)[0]);
-      while (ranked.length < affordable && pool.length) {
+      while (ranked.length < total && pool.length) {
         let bestI = 0, bestD = -Infinity;
         for (let i = 0; i < pool.length; i++) {
           let dMin = Infinity;
@@ -762,16 +804,27 @@ export const GENERATORS = {
       }
     }
 
-    // Ripple-start cap: shift the whole wave earlier so the nearest participant lands within the cap.
+    // Lifts: the field stays at the floor until the drop lands — then, FROM THE IMPACT, every
+    // participant lifts +1 (lit) as an outward ripple and goes dark after the glow (a brief flash).
+    // (In 'none' this is the whole pass; the panels stay lifted.) Nothing ripples during the windup.
     const rippleStartCap = params.rippleStartCap ?? 300;
     const firstDist = ranked.length ? Math.min(...ranked.map((r) => r.dist)) : 0;
     const rippleShift = Math.min(0, rippleStartCap - firstDist * rippleInterval);
-
     for (const { p, dist } of ranked) {
-      const wt = tDrop + dist * rippleInterval + rippleShift;
-      // Ripple pass: lift one level + light on, then drop back to the floor, dark.
-      actions.push({ t: wt, run: () => engine.move(p.x, p.y, p.orient, rippleTop, 1) });
-      actions.push({ t: wt + riseMs, run: () => engine.move(p.x, p.y, p.orient, floorPos, 0) });
+      const wt = tImpact + dist * rippleInterval + rippleShift;
+      actions.push({ t: wt,          run: () => engine.move(p.x, p.y, p.orient, rippleTop, 1) });
+      actions.push({ t: wt + glowMs, run: () => engine.off(p.x, p.y, p.orient) });
+    }
+
+    // Returns (all/some): a no-light move back to the floor, staged AFTER the impact in two batches
+    // over the centre's rebound — the bounce batch as the centre springs back up (window ≈ risingMs),
+    // the fall batch as it drops again (window ≈ fallingMs). Different panels than the centre, so
+    // these fire without waiting on it; each panel's own return queues behind its lift (per-panel gate).
+    if (doReturn) {
+      const back = (p) => () => engine.move(p.x, p.y, p.orient, floorPos, 0);
+      const cut = Math.min(nBounce, ranked.length);
+      for (const { p } of ranked.slice(0, cut)) actions.push({ t: tImpact,             run: back(p) }); // bounce batch
+      for (const { p } of ranked.slice(cut))    actions.push({ t: tImpact + risingMs,  run: back(p) }); // fall batch
     }
 
     return actions;
