@@ -70,6 +70,8 @@ export class MazeMidiController {
     this._tokens     = this.burst; // token-bucket level (persists across enqueues)
     this._lastRefill = null;   // last token refill timestamp (set on first pump)
     this._out        = null;   // output resolved at enqueue time
+    this._nextWhen   = 0;      // monotonic wire timestamp — guarantees delayMs between ALL messages
+                               // (across units too), independent of when the pump code actually runs
 
     // Logging mode: when on, every message actually put on the wire is recorded per-note so
     // the HUD can show a panel's recent MIDI. Bounded per note to avoid unbounded growth.
@@ -257,9 +259,13 @@ export class MazeMidiController {
     }
 
     this._queue.shift();
-    let when = now + 1;                            // tiny lead so all sends are scheduled
+    // Monotonic timestamp: at least `step` (delayMs) after the previous message on the wire, even
+    // if the pump drained several units in a burst. This makes delayMs authoritative for the wire
+    // spacing of EVERY message (note-ons, note-offs, all of it), not just messages within a unit.
+    let when = Math.max(now + 1, this._nextWhen);
     let whenLast = when;
     for (const m of unit.msgs) { this._emit(out, m, when); whenLast = when; when += step; }
+    this._nextWhen = when;                         // next message waits delayMs past this unit's last
     this._tokens -= cost;
     // Report the real send time (post-throttle) so the engine can sync belief/animation to it.
     if (unit.onSent) { try { unit.onSent(unit.note, whenLast); } catch (e) { console.error(e); } }
@@ -296,6 +302,7 @@ export class MazeMidiController {
     this._pumpTimer = null;
     this._queue = [];
     this._draining = false;
+    this._nextWhen = 0;   // fresh sends after a flush start from "now" again
   }
 
   /** Kill every light: one note-off (0x80) per note 0–127. No movement. First stops all

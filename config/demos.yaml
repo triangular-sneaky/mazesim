@@ -28,32 +28,32 @@ demos:
       - { key: position, label: height, min: 0, max: 255, step: 5 }
 
   # ---- Flowie ------------------------------------------------------------
-  - id: geo-corners
-    name: Corners
-    desc: four corner clusters lit at heights that match a perspective box view — back corners high, front corners low; all other panels up and dark
-    group: 1-Flowie 🔸
-    generator: geo
-    params: { shape: corners, restPos: 255 }
-    uiParams:
-      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
+  # - id: geo-corners
+  #   name: Corners
+  #   desc: four corner clusters lit at heights that match a perspective box view — back corners high, front corners low; all other panels up and dark
+  #   group: 1-Flowie 🔸
+  #   generator: geo
+  #   params: { shape: corners, restPos: 255 }
+  #   uiParams:
+  #     - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
 
-  - id: geo-faces
-    name: Faces
-    desc: north wall lit high, south stepped wall lit low — two opposing box faces at different depths; all other panels up and dark
-    group: 1-Flowie 🔸
-    generator: geo
-    params: { shape: faces, restPos: 255 }
-    uiParams:
-      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
+  # - id: geo-faces
+  #   name: Faces
+  #   desc: north wall lit high, south stepped wall lit low — two opposing box faces at different depths; all other panels up and dark
+  #   group: 1-Flowie 🔸
+  #   generator: geo
+  #   params: { shape: faces, restPos: 255 }
+  #   uiParams:
+  #     - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
 
-  - id: geo-corner
-    name: Corner
-    desc: north wall high + west wall mid — two planes meeting at the NW joint, one lit box corner; all other panels up and dark
-    group: 1-Flowie 🔸
-    generator: geo
-    params: { shape: corner, restPos: 255 }
-    uiParams:
-      - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
+  # - id: geo-corner
+  #   name: Corner
+  #   desc: north wall high + west wall mid — two planes meeting at the NW joint, one lit box corner; all other panels up and dark
+  #   group: 1-Flowie 🔸
+  #   generator: geo
+  #   params: { shape: corner, restPos: 255 }
+  #   uiParams:
+  #     - { key: restPos, label: rest height, min: 0, max: 255, step: 5 }
 
   - id: geo-diagonal
     name: Diagonal
@@ -67,21 +67,21 @@ demos:
       - { key: restPos,   label: rest height, min: 0, max: 255, step: 5 }
       - { key: stayLight, label: stay to light, type: checkbox }
   # ---- Chase ----------------------------------------------------------------
-  - id: chase-top-1
-    name: Pattern on top 1
-    desc: diagonal chase into a symmetric two-height pattern — slow blinks while moving, then panels and lights hold static; auto-retriggered every period seconds
-    group: 2-Chase 🎥
-    generator: chase
-    params:
-      duration: 10000
-      topA: 255
-      topB: 64
-      period: 30
-    uiParams:
-      - { key: topA,   label: top high,  min: 64,  max: 255, step: 5 }
-      - { key: topB,   label: top low,   min: 0,   max: 200, step: 5 }
-      - { key: period, label: period (s), min: 2,  max: 120, step: 1 }
-      - { key: _panel_map, type: panelMap, label: down panels, loKey: topB, hiKey: topA }
+  # - id: chase-top-1
+  #   name: Pattern on top 1
+  #   desc: diagonal chase into a symmetric two-height pattern — slow blinks while moving, then panels and lights hold static; auto-retriggered every period seconds
+  #   group: 2-Chase 🎥
+  #   generator: chase
+  #   params:
+  #     duration: 10000
+  #     topA: 255
+  #     topB: 64
+  #     period: 30
+  #   uiParams:
+  #     - { key: topA,   label: top high,  min: 64,  max: 255, step: 5 }
+  #     - { key: topB,   label: top low,   min: 0,   max: 200, step: 5 }
+  #     - { key: period, label: period (s), min: 2,  max: 120, step: 1 }
+  #     - { key: _panel_map, type: panelMap, label: down panels, loKey: topB, hiKey: topA }
 
   - id: chase-top-2
     name: Pattern on top 2
@@ -100,21 +100,21 @@ demos:
       - { key: period, label: period (s), min: 2,  max: 120, step: 1 }
       - { key: _panel_map, type: panelMap, label: down panels, loKey: topB, hiKey: topA }
 
-  - id: maze
-    name: Maze
-    desc: generates a navigatable maze — wall panels drop to low height, passage panels rise; new random maze each retrigger
-    group: 2-Chase 🎥
-    generator: maze
-    params:
-      duration: 12000
-      topA: 255
-      topB: 64
-      period: 30
-    uiParams:
-      - { key: topA,   label: top high,  min: 64,  max: 255, step: 5 }
-      - { key: topB,   label: top low,   min: 0,   max: 200, step: 5 }
-      - { key: period, label: period (s), min: 2,  max: 120, step: 1 }
-      - { key: _panel_map, type: panelMap, label: walls (down), loKey: topB, hiKey: topA }
+  # - id: maze
+  #   name: Maze
+  #   desc: generates a navigatable maze — wall panels drop to low height, passage panels rise; new random maze each retrigger
+  #   group: 2-Chase 🎥
+  #   generator: maze
+  #   params:
+  #     duration: 12000
+  #     topA: 255
+  #     topB: 64
+  #     period: 30
+  #   uiParams:
+  #     - { key: topA,   label: top high,  min: 64,  max: 255, step: 5 }
+  #     - { key: topB,   label: top low,   min: 0,   max: 200, step: 5 }
+  #     - { key: period, label: period (s), min: 2,  max: 120, step: 1 }
+  #     - { key: _panel_map, type: panelMap, label: walls (down), loKey: topB, hiKey: topA }
 
   - id: mountain
     name: Mountain
@@ -132,15 +132,9 @@ demos:
   - id: prison
     name: Prison
     desc: select a cell (click or type x,y) — Up cages its 4 edges high at z=4 lit while the rest go up and dark; Down starts the cage bob from where it is
-    group: prison
+    group: 2-Chase 🎥
     interactive: true
   # ---- Lullaby ------------------------------------------------------------
-  - id: blanket
-    name: Blanket
-    desc: select to reveal three buttons — Blanket lays the field on the floor as a concentric wave from the outside in (~10% dimly lit at 30%, drop cell lifted to z2), then fades all lights in the same order; Flat lowers the central 4 (drop-cell) edges back to the floor; Moon raises panel 88 to z6 at full brightness
-    group: 4-Lullaby 🧀
-    interactive: true
-
   - id: lullaby-drop
     name: Drop
     desc: field rests on the floor; center cell bounces — lit on descent, dark on ascent — each impact ripples a 1-step lift wave outward. Budget-aware — engages only the nearest panels the wire can afford (auto, or cap with max panels). "Sync to wire" commits/animates each panel on the real send and holds its next step until the move ends
@@ -193,12 +187,17 @@ demos:
       - { key: speed,           label: step ms,       min: 50,   max: 2000, step: 25   }
       - { key: rippleSize,      label: ripple size,   min: 0.01, max: 0.5,  step: 0.01 }
       - { key: holdMs,          label: trail hold ms, min: 50,   max: 5000, step: 25   }
-
-  - id: lullaby-float
-    name: Float
-    desc: center cell bounces lo↔hi at global speed, always lit; surrounding panels elastically follow — closer = deeper pull, further = dimmer; brightness tracks position live
+  - id: blanket
+    name: Blanket
+    desc: select to reveal three buttons — Blanket lays the field on the floor as a concentric wave from the outside in (~10% dimly lit at 30%, drop cell lifted to z2), then fades all lights in the same order; Flat lowers the central 4 (drop-cell) edges back to the floor; Moon raises panel 88 to z6 at full brightness
     group: 4-Lullaby 🧀
     interactive: true
+
+  # - id: lullaby-float
+  #   name: Float
+  #   desc: center cell bounces lo↔hi at global speed, always lit; surrounding panels elastically follow — closer = deeper pull, further = dimmer; brightness tracks position live
+  #   group: 4-Lullaby 🧀
+  #   interactive: true
 
 
 

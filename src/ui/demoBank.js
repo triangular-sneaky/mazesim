@@ -48,6 +48,8 @@ export class DemoBank {
     this._liveParams = new Map(); // id -> current param values (user-editable copy)
     this._paramsTimer = null;
     this._loadParams();           // restore edited movement params from a previous session
+    this._notes = this._loadNotes(); // per-section free-text notes (persisted)
+    this._notesTimer = null;
 
     if (this.searchEl) {
       this.searchEl.addEventListener('input', () => {
@@ -83,6 +85,44 @@ export class DemoBank {
       try { localStorage.setItem('demoBank.params.v1', JSON.stringify(blob)); }
       catch { /* quota / disabled — best effort */ }
     }, 300);
+  }
+
+  /** Load persisted per-section notes ({ group -> text }). */
+  _loadNotes() {
+    if (typeof localStorage === 'undefined') return {};
+    try { return JSON.parse(localStorage.getItem('demoBank.notes.v1') || 'null') || {}; }
+    catch { return {}; }
+  }
+
+  /** Debounced save of all per-section notes. */
+  _saveNotes() {
+    if (typeof localStorage === 'undefined') return;
+    if (this._notesTimer) clearTimeout(this._notesTimer);
+    this._notesTimer = setTimeout(() => {
+      try { localStorage.setItem('demoBank.notes.v1', JSON.stringify(this._notes)); }
+      catch { /* quota / disabled — best effort */ }
+    }, 300);
+  }
+
+  /** An editable free-text note pinned at the end of a section (persisted per group). */
+  _noteRow(group) {
+    const wrap = document.createElement('div');
+    wrap.className = 'demo-note';
+    const ta = document.createElement('textarea');
+    ta.rows = 2;
+    ta.placeholder = 'note…';
+    ta.value = this._notes[group] || '';
+    ta.style.cssText = 'width:100%;box-sizing:border-box;resize:vertical;margin:4px 0 2px;' +
+      'font:inherit;font-size:11px;color:var(--text);background:rgba(0,0,0,0.18);' +
+      'border:1px solid var(--border);border-radius:4px;padding:4px 6px';
+    // Don't let clicks/keys bubble to the header (collapse) or trigger a re-render mid-typing.
+    ta.addEventListener('click', (e) => e.stopPropagation());
+    ta.addEventListener('input', () => {
+      if (ta.value) this._notes[group] = ta.value; else delete this._notes[group];
+      this._saveNotes();
+    });
+    wrap.append(ta);
+    return wrap;
   }
 
   /** Section background tint for a group (matched by keyword; empty = untinted). */
@@ -308,7 +348,9 @@ export class DemoBank {
         const row = document.createElement('div');
         row.className = 'demo';
         const info = document.createElement('div');
-        info.innerHTML = `<div class="name">${demo.name}</div><div class="desc">${demo.desc || ''}</div>`;
+        info.style.flex = '1'; info.style.minWidth = '0'; // fill the row so buttons align at the right
+        // Description kept in the config/model but not rendered for now — name only.
+        info.innerHTML = `<div class="name">${demo.name}</div>`;
 
         if (controller) {
           const open = this._open.has(demo.id);
@@ -371,6 +413,7 @@ export class DemoBank {
           }
         }
       }
+      section.append(this._noteRow(group)); // editable note pinned at the end of the section
     }
 
     // Reconcile controller lifecycles: a controller is active only while its controls

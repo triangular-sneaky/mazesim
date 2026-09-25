@@ -60,19 +60,19 @@ blocks-on:
 
 
 loops:
-  - id: loop-odd-even
-    behavior: blocks-descending
-    name: Blocks — odd and even
-    desc: 2 sparse blocks — odd and even columns, interleaved
-    blocks: |
-      1 2 1 2 1 2
-      1 2 1 2 1 2
-      1 2 1 2 1 2
-      1 2 1 2 1 2
-      1 2 1 2 1 .
-      x x x x . .
-      x x . . . .
-      x x . . . .
+  # - id: loop-odd-even
+  #   behavior: blocks-descending
+  #   name: Blocks — odd and even
+  #   desc: 2 sparse blocks — odd and even columns, interleaved
+  #   blocks: |
+  #     1 2 1 2 1 2
+  #     1 2 1 2 1 2
+  #     1 2 1 2 1 2
+  #     1 2 1 2 1 2
+  #     1 2 1 2 1 .
+  #     x x x x . .
+  #     x x . . . .
+  #     x x . . . .
 
   - id: loop-pillars-descending
     behavior: blocks-descending
@@ -88,30 +88,30 @@ loops:
       x x . . . .
       x x . . . .
 
-  - id: loop-pillars-on
-    behavior: blocks-on
-    name: Blocks — pillars ON
-    desc: 2x2 pillars
-    blocks: |
-      1 1 x 2 2 x
-      1 1 x 2 2 x
-      x x x x x x
-      2 2 x 1 1 x
-      2 2 x 1 1 .
-      x x x x . .
-      x x . . . .
-      x x . . . .
+  # - id: loop-pillars-on
+  #   behavior: blocks-on
+  #   name: Blocks — pillars ON
+  #   desc: 2x2 pillars
+  #   blocks: |
+  #     1 1 x 2 2 x
+  #     1 1 x 2 2 x
+  #     x x x x x x
+  #     2 2 x 1 1 x
+  #     2 2 x 1 1 .
+  #     x x x x . .
+  #     x x . . . .
+  #     x x . . . .
 
-  - id: loop-bands
-    behavior: blocks-descending
-    name: Blocks — bands
-    desc: four blocks stacked north to south, each moving as one slab
-    blocks: |
-      1 1 1 1 1 1
-      1 1 1 1 1 1
-      2 2 2 2 2 2
-      2 2 2 2 2 2
-      3 3 3 3 3 .
-      3 3 3 3 . .
-      4 4 . . . .
-      4 4 . . . .
+  # - id: loop-bands
+  #   behavior: blocks-descending
+  #   name: Blocks — bands
+  #   desc: four blocks stacked north to south, each moving as one slab
+  #   blocks: |
+  #     1 1 1 1 1 1
+  #     1 1 1 1 1 1
+  #     2 2 2 2 2 2
+  #     2 2 2 2 2 2
+  #     3 3 3 3 3 .
+  #     3 3 3 3 . .
+  #     4 4 . . . .
+  #     4 4 . . . .

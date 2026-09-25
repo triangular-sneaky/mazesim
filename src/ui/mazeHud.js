@@ -473,13 +473,17 @@ export class MazeHud {
     this._afterChange();
   }
 
-  /** Light off every selected panel: a bare note-off (no movement) + belief dark. */
+  /**
+   * Light off every selected panel: a bare note-off (no movement) + belief dark. ALWAYS sends the
+   * note-off for a non-dead selected panel, regardless of tracked brightness — belief can lag the
+   * physical light (divergence), so an explicit "light off" should never be skipped.
+   */
   _lightOffSelected() {
     const notes = [];
     for (const note of this.selected) {
       const p = this.state.get(note);
       if (!p) continue;
-      if (!p.dead && p.brightness > 0 && this.midi.enabled) notes.push(note);
+      if (!p.dead && this.midi.enabled) notes.push(note);   // send regardless of belief
       this.state.setBrightness(note, 0);
     }
     if (notes.length) this.midi.sendOff(notes);

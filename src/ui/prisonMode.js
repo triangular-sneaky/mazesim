@@ -17,7 +17,7 @@
  * effect driven directly onto the board.
  */
 import { cellEdgeList } from '../model/layout.js';
-import { zToPos } from '../model/mazeState.js';
+import { zToPos, posToZ, applyStep } from '../model/mazeState.js';
 
 export class PrisonMode {
   constructor(engine, cells, config) {
@@ -46,6 +46,13 @@ export class PrisonMode {
     this.oscillations = 2;   // total up-down cycles before holding at the ground (0 = endless)
     this.bottomDwell = 0.2;  // s held at the ground before rising
     this.topDwell = 0.2;     // s held at the top before dropping
+
+    // "get lost" params (operator-editable below): scatter a few random panels to a low mid level
+    // at faint, varied brightness.
+    this.lostCount = 5;      // how many random panels to drop
+    this.lostZLo = 2;        // random target z, low bound
+    this.lostZHi = 3;        // random target z, high bound
+    this.lostLitMax = 40;    // max brightness, percent (each panel gets a random 0..this)
 
     // State.
     this._active = false;
@@ -96,7 +103,11 @@ export class PrisonMode {
     cBtn.textContent = 'switch to C';
     cBtn.title = 'Turn the current prison lights off (no movement), then light a “#” around the newly-selected cell (its 4 edges + 8 extensions) with a +1-step lights-on';
     cBtn.addEventListener('click', () => this._switchToC());
-    btnRow.append(upBtn, downBtn, cBtn);
+    const lostBtn = document.createElement('button');
+    lostBtn.textContent = 'get lost';
+    lostBtn.title = 'Drop a few random panels to a low mid level (z 2–3) at faint, varied brightness (0–40%)';
+    lostBtn.addEventListener('click', () => this._getLost());
+    btnRow.append(upBtn, downBtn, cBtn, lostBtn);
 
     // Down-bob params: total oscillations (0 = endless) + dwell at each end.
     const numRow = (label, get, set, min, max, step) => {
@@ -118,12 +129,17 @@ export class PrisonMode {
       (v) => { this.oscillations = Math.round(v); }, 0, 99, 1);
     const botRow = numRow('bottom delay (s)', () => this.bottomDwell, (v) => { this.bottomDwell = v; }, 0, 10, 0.1);
     const topRow = numRow('top delay (s)', () => this.topDwell, (v) => { this.topDwell = v; }, 0, 10, 0.1);
+    const lostCountRow = numRow('lost: count',    () => this.lostCount,  (v) => { this.lostCount = Math.round(v); }, 0, 30, 1);
+    const lostZLoRow   = numRow('lost: z from',   () => this.lostZLo,    (v) => { this.lostZLo = Math.round(v); }, 0, 8, 1);
+    const lostZHiRow   = numRow('lost: z to',     () => this.lostZHi,    (v) => { this.lostZHi = Math.round(v); }, 0, 8, 1);
+    const lostLitRow   = numRow('lost: max lit %', () => this.lostLitMax, (v) => { this.lostLitMax = v; }, 0, 100, 5);
 
     const hint = document.createElement('div');
     hint.className = 'hint';
     hint.textContent = 'Click a cell (or type x,y) to select — Up cages it high, Down starts the bob, “switch to C” darkens the current lights and lights a # around the newly-selected cell.';
 
-    this.el.append(canvas, selRow, btnRow, oscRow, botRow, topRow, hint);
+    this.el.append(canvas, selRow, btnRow, oscRow, botRow, topRow,
+      lostCountRow, lostZLoRow, lostZHiRow, lostLitRow, hint);
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
 
@@ -190,13 +206,24 @@ export class PrisonMode {
     this.trapPanels = this._edgesOf(cell.x, cell.y);
     for (const p of this.trapPanels) this.releasing.delete(p.key);
     const cageKeys = new Set(this.trapPanels.map((p) => `${p.x},${p.y},${p.orient}`));
-    // Everything else: up and dark.
-    for (const p of this.engine.list()) {
-      if (!cageKeys.has(`${p.x},${p.y},${p.orient}`)) this.engine.move(p.x, p.y, p.orient, this.releasePos, 0);
-    }
-    // The cage: up to z=4, lit.
+
+    // Engage the cage FIRST (z=4, lit) so it lifts right away, ahead of sending the rest of the
+    // field up — otherwise its move would sit behind ~80 queued field moves in the gate.
     this.engine.sweepTo(this._moves(this.cagePos), { brightness: this.peak });
     this.glowPhase = 0;
+
+    // Everything else: up and dark — but SKIP panels already at the top (no redundant move to
+    // queue). A lit one up there just gets its light turned off (a bare note-off, no movement).
+    const topZ = posToZ(this.releasePos);
+    for (const p of this.engine.list()) {
+      if (cageKeys.has(`${p.x},${p.y},${p.orient}`)) continue;
+      const bel = this.engine.state?.get?.(this.engine.noteAt(p.x, p.y, p.orient));
+      if (bel && bel.z === topZ) {
+        if (bel.brightness > 0) this.engine.off(p.x, p.y, p.orient); // already up → just darken
+        continue;                                                    // already up → skip the move
+      }
+      this.engine.move(p.x, p.y, p.orient, this.releasePos, 0);
+    }
   }
 
   /** Down: start the classic cage bob from the cell's current position (drops, then bobs). */
@@ -239,8 +266,16 @@ export class PrisonMode {
     const cell = this._selected || this._parseCell();
     if (!cell) return;
     this._bobbing = false;
-    // 1. Lights off, NO movement.
-    for (const p of [...this.trapPanels, ...this._cPanels]) this.engine.off(p.x, p.y, p.orient);
+    // 1. Clear every currently-lit panel with a 1-STEP MOVE at velocity 1 (for now) instead of a
+    //    bare note-off: a note-on at vel 1 darkens the light (vel 1 = off) AND re-arms the step
+    //    counter, which clears more reliably IRL than a lone note-off. Steps the panel one level.
+    for (const sp of this.engine.list()) {
+      const bel = this.engine.state?.get?.(this.engine.noteAt(sp.x, sp.y, sp.orient));
+      if (bel && !bel.dead && bel.brightness > 0) {
+        const ns = applyStep({ z: bel.z, v: bel.v });               // one step along the bounce
+        this.engine.move(sp.x, sp.y, sp.orient, zToPos(ns.z), 0);   // brightness 0 → vel 1 = off
+      }
+    }
     this.trapPanels = [];
     this.trapCell = null;
     this.bobTarget = null;
@@ -253,6 +288,22 @@ export class PrisonMode {
       this.engine.move(p.x, p.y, p.orient, zToPos(z), this.peak);
     }
     this._cPanels = hash;
+  }
+
+  /**
+   * "get lost": scatter `lostCount` random panels to a random low-mid level (z in [lostZLo,lostZHi])
+   * at a random faint brightness (0..lostLitMax%). Additive — leaves any existing prison lights be.
+   */
+  _getLost() {
+    const zLo = Math.min(this.lostZLo, this.lostZHi);
+    const zHi = Math.max(this.lostZLo, this.lostZHi);
+    const litMax = Math.max(0, Math.min(1, this.lostLitMax / 100));
+    const all = this.engine.list().slice().sort(() => Math.random() - 0.5);
+    for (const p of all.slice(0, Math.max(0, Math.round(this.lostCount)))) {
+      const z = zLo + Math.floor(Math.random() * (zHi - zLo + 1));
+      const bright = Math.random() * litMax;
+      this.engine.move(p.x, p.y, p.orient, zToPos(z), bright);
+    }
   }
 
   /**

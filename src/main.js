@@ -107,15 +107,15 @@ function main() {
     return;
   }
 
-  // Each loops.yaml entry becomes a movement under the "3-Loops 🎤" group, inserted after Prison.
+  // Each loops.yaml entry becomes a movement under the "3-Loops 🎤" group, inserted after 2-Chase.
   const loopDemos = loops.map((lp) => ({
     id: lp.id, name: lp.name, desc: lp.desc, group: '3-Loops 🎤',
     generator: lp.generator, params: { groups: lp.groups, ...lp.params },
     uiParams: lp.uiParams,
   }));
   if (loopDemos.length) {
-    const lastPrison = [...demos].map((d, i) => d.group === 'prison' ? i : -1).filter((i) => i >= 0).pop();
-    const after = lastPrison != null ? lastPrison + 1 : demos.length;
+    const lastChase = [...demos].map((d, i) => String(d.group).includes('Chase') ? i : -1).filter((i) => i >= 0).pop();
+    const after = lastChase != null ? lastChase + 1 : demos.length;
     demos.splice(after, 0, ...loopDemos);
   }
 
