@@ -193,11 +193,24 @@ export class MazeEngine extends PanelEngine {
     const note = this.noteAt(x, y, orient);
     if (note == null) return false;
     this._clearOff(`${x},${y},${orient}`);
-    const pending = this._awaitingWire.get(note); // a lit move dispatched but not yet on the wire
+
+    // Wire-synced: if step unit(s) are still QUEUED for this panel (not yet on the wire), the light
+    // off must go AFTER them — append it to the FIFO. Sending it now would land BEFORE the queued
+    // move dispatches, and that move would re-light the panel, so the off would "not register". It
+    // never splits a unit (its own note-off unit) and doesn't wait for travel — it's emitted right
+    // after the preceding unit drains.
+    const q = this._moveQueue.get(note);
+    if (this.syncToWire && q && q.length) { q.push({ off: true, x, y, orient }); return true; }
+
+    // A move already handed to the wire (awaiting its callback) still lights the panel from its
+    // in-flight unit, so emit the note-off (it follows that unit in the transport FIFO — no wait for
+    // travel to end) and cancel the pending re-light so belief lands dark.
+    const pending = this._awaitingWire.get(note);
+    const pendingLit = pending && pending.onVel > 0;
+    if (pending) pending.onVel = 0;
     const p = this.state.get(note);
     if (!p) return false;
-    const wasLit = p.brightness > 0 || (pending && pending.onVel > 0);
-    if (pending) pending.onVel = 0;               // its deferred commit must not re-light after this
+    const wasLit = p.brightness > 0 || pendingLit;
     if (!p.dead && wasLit && this.midi?.enabled) this.midi.sendOff([note]);
     this.state.setBrightness(note, 0);
     return true;
@@ -262,11 +275,12 @@ export class MazeEngine extends PanelEngine {
     for (const note of done) {
       this._busyUntil.delete(note);
       if (this.onPanelDone) { try { this.onPanelDone(note); } catch (e) { console.error(e); } }
-      const q = this._moveQueue.get(note);          // dispatch this panel's next queued move, in order
+      const q = this._moveQueue.get(note);          // dispatch this panel's next queued op, in order
       if (q && q.length) {
         const req = q.shift();
         if (!q.length) this._moveQueue.delete(note);
-        this._dispatch(req);
+        if (req.off) this.off(req.x, req.y, req.orient); // a queued light-off — now free, emit it
+        else this._dispatch(req);
       }
     }
   }

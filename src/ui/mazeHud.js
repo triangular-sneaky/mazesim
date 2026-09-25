@@ -72,7 +72,7 @@ export class MazeHud {
    * @param {HTMLElement} opts.viewport   the #viewport element (for the overlay layer)
    * @param {{x:number,y:number}[]} opts.cells
    */
-  constructor(container, { engine, grid, view, state, midi, viewport, cells, meshes }) {
+  constructor(container, { engine, grid, view, state, midi, viewport, cells, meshes, onStop }) {
     this.engine = engine;
     this.grid = grid;
     this.view = view;
@@ -80,6 +80,7 @@ export class MazeHud {
     this.midi = midi;
     this.meshes = meshes;       // 3D panel meshes (for greying dead panels); may be absent
     this.viewport = viewport;
+    this.onStop = onStop || null; // stop all movements (wired in main.js) — called before a bulk Fix
 
     // Both views are always live: the 2D top-down canvas AND the virtual chips over the 3D
     // scene. The 3D sim always mirrors tracked belief — with the movement→state inversion the
@@ -147,16 +148,13 @@ export class MazeHud {
     stepAllBtn.title = 'Send one step to every panel so you can verify each one moves as tracked';
     const zeroBtn = mkBtn('Fix to 0', () => this.resetAtZero());
     zeroBtn.classList.add('danger');
-    zeroBtn.title = 'Assume every panel is home and dark: fix tracked belief to 0+, lights off (no MIDI, no movement)';
-    const midBtn = mkBtn('Fix to 4', () => this.resetAtFour());
-    midBtn.classList.add('danger');
-    midBtn.title = 'Assume every panel is at mid and dark: fix tracked belief to 4+, lights off (no MIDI, no movement)';
+    zeroBtn.title = 'Stop all movements, then assume every panel is home and dark: fix tracked belief to 0+, lights off (no MIDI, no movement)';
     const topBtn = mkBtn('Fix to 8-', () => this.resetAtTop());
     topBtn.classList.add('danger');
-    topBtn.title = 'Assume every panel is at the top and dark: fix tracked belief to 8-, lights off (no MIDI, no movement)';
+    topBtn.title = 'Stop all movements, then assume every panel is at the top and dark: fix tracked belief to 8-, lights off (no MIDI, no movement)';
     const panicBtn = mkBtn('panic', () => { if (this.midi.enabled) this.midi.panic(); });
     panicBtn.title = 'All lights off (no movement)';
-    g1.append(stepAllBtn, zeroBtn, midBtn, topBtn, panicBtn);
+    g1.append(stepAllBtn, zeroBtn, topBtn, panicBtn);
 
     const g2 = document.createElement('div');
     g2.className = 'row';
@@ -558,9 +556,11 @@ export class MazeHud {
 
   /**
    * Assume every panel is home at 0+ (z=0, v=+1) with its light OFF: fix tracked belief only,
-   * NO midi — a bulk "Fix". Nothing physically moves; the 3D mirror glides home fast + dark.
+   * NO midi — a bulk "Fix". First STOPS all movements so nothing keeps driving the maze against
+   * the corrected belief. Nothing physically moves; the 3D mirror glides home fast + dark.
    */
   resetAtZero() {
+    this.onStop?.();
     for (const p of this.state.list()) {
       if (p.dead) continue;
       this.state.commit(p.note, { z: 0, v: 1 }, 0);
@@ -571,26 +571,12 @@ export class MazeHud {
   }
 
   /**
-   * Assume every panel is at mid at 4+ (z=4, v=+1) with its light OFF: fix tracked belief only,
-   * NO midi — a bulk "Fix" (a neutral mid pose, e.g. the Diagonal's unlit rest height).
-   * Nothing physically moves; the 3D mirror glides there fast + dark.
-   */
-  resetAtFour() {
-    for (const p of this.state.list()) {
-      if (p.dead) continue;
-      this.state.commit(p.note, { z: 4, v: 1 }, 0);
-      this._fastReset.add(p.note);
-    }
-    this._lastMirroredPos.clear();
-    this._refreshCard();
-  }
-
-  /**
    * Assume every panel is at the top at 8- (z=N, v=-1) with its light OFF: fix tracked belief
    * only, NO midi — a bulk "Fix" (the natural post-arrival state at the top, ready to descend).
-   * Nothing physically moves; the 3D mirror glides up fast + dark.
+   * First STOPS all movements. Nothing physically moves; the 3D mirror glides up fast + dark.
    */
   resetAtTop() {
+    this.onStop?.();
     for (const p of this.state.list()) {
       if (p.dead) continue;
       this.state.commit(p.note, { z: N, v: -1 }, 0);

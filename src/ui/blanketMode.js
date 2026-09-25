@@ -14,11 +14,12 @@
 import { cellEdgeList, edgeKey, panelCenter } from '../model/layout.js';
 import { zToPos } from '../model/mazeState.js';
 
-const MOON_NOTE = 88;   // the panel the Moon button raises
-const LIT_FRAC  = 0.10; // fraction of (non-drop) panels lit by Blanket
-const DIM       = 0.30; // brightness of every lit panel (0..1)
+const MOON_NOTE  = 88;   // the panel the Moon button raises
+const LIT_FRAC   = 0.10; // fraction of (non-drop) panels the blanket selects
+const DIM        = 0.30; // brightness of the central (drop-cell) panels — lit, and it stays lit
+const RANDOM_DIM = 0;    // the random ~10% (selection kept in code) — 0% for now; set to DIM to sprinkle them
 const WAVE_MS   = 150;  // per unit of distance — how fast the concentric wave sweeps in
-const HOLD_MS   = 400;  // how long the full blanket sits lit before it fades out
+const GLOW_MS   = 150;  // a lit step goes dark this soon after it lights (a brief flash)
 
 export class BlanketMode {
   constructor(engine, cells) {
@@ -80,24 +81,29 @@ export class BlanketMode {
       const key = `${p.x},${p.y},${p.orient}`;
       const { px, py } = panelCenter(p.x, p.y, p.orient);
       const dist = Math.hypot(px - ccx, py - ccy);
-      const z = dropKeys.has(key) ? 2 : 0;
-      const bright = dropKeys.has(key) || litSet.has(key) ? DIM : 0;
-      return { p, dist, z, bright };
+      const central = dropKeys.has(key);
+      const z = central ? 2 : 0;
+      // Central drop cell lights (and stays lit); the random ~10% are kept in code but held at 0%.
+      const bright = central ? DIM : (litSet.has(key) ? RANDOM_DIM : 0);
+      return { p, dist, z, bright, central };
     });
     const maxD = Math.max(1, ...scene.map((s) => s.dist));
 
-    // On-wave: outer ring (largest dist) first, centre last.
+    // Concentric wave, outer ring (largest dist) first, centre last:
+    //   - central drop cell → lift to z2, lit, and STAY lit;
+    //   - a selected ~10%   → flash: light on the floor, then dark RIGHT AWAY (GLOW_MS later);
+    //   - everything else   → just go dark IN PLACE — a bare note-off, NO move/step (no vel-1 blink).
+    // (With the random ~10% at 0% nothing flashes for now — restore RANDOM_DIM for the sparkle.)
     for (const s of scene) {
-      const t = (maxD - s.dist) * WAVE_MS;
-      this._timers.push(setTimeout(
-        () => this.engine.move(s.p.x, s.p.y, s.p.orient, zToPos(s.z), s.bright), t));
-    }
-    // Off-wave: after the blanket is fully laid + a hold, fade the lit panels in the SAME order.
-    const onDone = maxD * WAVE_MS + HOLD_MS;
-    for (const s of scene) {
-      if (s.bright <= 0) continue;
-      const t = onDone + (maxD - s.dist) * WAVE_MS;
-      this._timers.push(setTimeout(() => this.engine.off(s.p.x, s.p.y, s.p.orient), t));
+      const tOn = (maxD - s.dist) * WAVE_MS;
+      if (s.central) {
+        this._timers.push(setTimeout(() => this.engine.move(s.p.x, s.p.y, s.p.orient, zToPos(2), DIM), tOn));
+      } else if (s.bright > 0) {
+        this._timers.push(setTimeout(() => this.engine.move(s.p.x, s.p.y, s.p.orient, zToPos(0), s.bright), tOn));
+        this._timers.push(setTimeout(() => this.engine.off(s.p.x, s.p.y, s.p.orient), tOn + GLOW_MS));
+      } else {
+        this._timers.push(setTimeout(() => this.engine.off(s.p.x, s.p.y, s.p.orient), tOn));
+      }
     }
   }
 

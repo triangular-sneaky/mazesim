@@ -135,6 +135,28 @@ test('syncToWire ON: belief commits only on the wire callback; a busy panel queu
   assert.ok(engine._busyUntil.get(60) > 0, 'travel clock armed from the send');
 });
 
+test('syncToWire ON: a light-off queued behind a move fires AFTER it (registers, not dropped)', () => {
+  let t = 0;
+  const { engine, state, offs, fireWire } = makeEngine({ now: () => t });
+  engine.syncToWire = true;
+
+  engine.move(0, 0, 'h', 96, 1);   // A: z0->z3 lit — dispatched (awaiting wire)
+  engine.move(0, 0, 'h', 255, 1);  // B: queued (panel busy)
+  engine.off(0, 0, 'h');           // off: must go AFTER B, not before it
+  assert.equal(engine._moveQueue.get(60).length, 2, 'B and the off are queued in order');
+  assert.equal(offs.length, 0, 'the off is held behind the queued unit, not sent early');
+
+  fireWire(60);               // A on the wire → commit z3 lit
+  t += 1e6; engine.tick(0);   // A done → dispatch B
+  fireWire(60);               // B on the wire → commit z8 lit
+  assert.equal(state.get(60).brightness > 0, true, 'panel lit after B');
+  assert.equal(offs.length, 0, 'off still waits — B has not finished');
+
+  t += 1e6; engine.tick(0);   // B done → the queued off finally fires
+  assert.equal(offs.length, 1, 'the light-off registers, after both moves');
+  assert.equal(state.get(60).brightness, 0, 'belief lands dark');
+});
+
 test('syncToWire ON: move-end drains the FIFO in order and fires onPanelDone', () => {
   let t = 0;
   const done = [];

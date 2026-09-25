@@ -107,9 +107,9 @@ function main() {
     return;
   }
 
-  // Each loops.yaml entry becomes a movement under a "Loops" group, inserted after Chase.
+  // Each loops.yaml entry becomes a movement under the "3-Loops 🎤" group, inserted after Prison.
   const loopDemos = loops.map((lp) => ({
-    id: lp.id, name: lp.name, desc: lp.desc, group: 'Loops',
+    id: lp.id, name: lp.name, desc: lp.desc, group: '3-Loops 🎤',
     generator: lp.generator, params: { groups: lp.groups, ...lp.params },
     uiParams: lp.uiParams,
   }));
@@ -232,6 +232,8 @@ function main() {
     // Panic (either panic button routes through mazeMidi.panic) stops ALL movements first —
     // the timeline player, any interactive controller, and the auto-cycle — then kills lights.
     mazeMidi.onPanic = () => { stopCycle(); demoBank.stopAll(); };
+    // A bulk "Fix to 0/8" in the maze HUD stops all movements first (so nothing keeps driving).
+    mazeHud.onStop = () => { stopCycle(); demoBank.stopAll(); };
     // On load we do NOT auto-play a movement: the sim now mirrors tracked belief (persisted or
     // neutral), and playing "all up" would drive the real maze (state -> MIDI) on every reload.
     // The demo cycle is still available via the "Cycle demos" button.

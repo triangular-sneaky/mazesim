@@ -85,6 +85,16 @@ export class DemoBank {
     }, 300);
   }
 
+  /** Section background tint for a group (matched by keyword; empty = untinted). */
+  _groupColor(group) {
+    const g = String(group).toLowerCase();
+    if (g.includes('flowie'))  return 'rgba(235, 238, 245, 0.22)'; // near-white (light in dark mode)
+    if (g.includes('chase'))   return 'rgba(214, 108, 108, 0.24)'; // reddish, desaturated
+    if (g.includes('loops'))   return 'rgba(104, 200, 128, 0.24)'; // green
+    if (g.includes('lullaby')) return 'rgba(226, 202, 84, 0.26)';  // yellow
+    return '';
+  }
+
   /** Group movements by their `group` field (default "Demos"), preserving order. */
   _groups() {
     const map = new Map();
@@ -275,6 +285,12 @@ export class DemoBank {
         this._collapseAll ? !this._expanded.has(group) : this._collapsed.has(group)
       );
 
+      // Each group is its own tinted section (background follows the group; see _groupColor).
+      const section = document.createElement('div');
+      section.className = 'demo-section';
+      const bg = this._groupColor(group);
+      if (bg) section.style.cssText = `background:${bg};border-radius:6px;padding:3px;margin-bottom:5px`;
+
       const header = document.createElement('div');
       header.className = 'demo-group';
       header.innerHTML =
@@ -282,7 +298,8 @@ export class DemoBank {
         `<span class="grp-name">${group}</span>` +
         `<span class="grp-count">${matched.length}</span>`;
       header.addEventListener('click', () => this._toggleGroup(group));
-      this.listEl.append(header);
+      section.append(header);
+      this.listEl.append(section);
 
       if (collapsed) continue;
 
@@ -300,12 +317,12 @@ export class DemoBank {
           btn.classList.toggle('primary', open);
           btn.addEventListener('click', () => this._toggleControls(demo.id));
           row.append(info, btn);
-          this.listEl.append(row);
+          section.append(row);
           if (open) {
             const box = document.createElement('div');
             box.className = 'demo-controls';
             box.append(controller.el);
-            this.listEl.append(box);
+            section.append(box);
           }
         } else {
           // Every timeline movement gets a params panel with at least the sync-to-wire checkbox.
@@ -342,7 +359,7 @@ export class DemoBank {
           gearBtn.addEventListener('click', () => this._toggleParams(demo.id));
           row.append(info, gearBtn, playBtn);
 
-          this.listEl.append(row);
+          section.append(row);
 
           if (paramsOpen) {
             const form = document.createElement('div');
@@ -350,7 +367,7 @@ export class DemoBank {
             for (const spec of uiParams) {
               form.append(this._paramRow(spec, liveP));
             }
-            this.listEl.append(form);
+            section.append(form);
           }
         }
       }

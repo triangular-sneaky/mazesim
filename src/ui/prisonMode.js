@@ -56,6 +56,7 @@ export class PrisonMode {
     this.trapCell = null;    // {x,y} currently actioned (Up or Down)
     this.trapPanels = [];    // Panel refs of the actioned cell's 4 edges
     this.bobTarget = null;   // current ping-pong target for the caged panels
+    this._cPanels = [];      // "switch to C" — the # of panels currently lit around the chosen cell
     this._dwell = 0;         // seconds held at the current bob end
     this.glowPhase = 0;      // seconds accumulated for the glow pulse
     this.releasing = new Map(); // panel.key -> { panel, b } fading brightness on release
@@ -91,7 +92,11 @@ export class PrisonMode {
     downBtn.textContent = 'Down';
     downBtn.title = 'Drop the selected cell and start the bob from where it is';
     downBtn.addEventListener('click', () => this._down());
-    btnRow.append(upBtn, downBtn);
+    const cBtn = document.createElement('button');
+    cBtn.textContent = 'switch to C';
+    cBtn.title = 'Turn the current prison lights off (no movement), then light a “#” around the newly-selected cell (its 4 edges + 8 extensions) with a +1-step lights-on';
+    cBtn.addEventListener('click', () => this._switchToC());
+    btnRow.append(upBtn, downBtn, cBtn);
 
     // Down-bob params: total oscillations (0 = endless) + dwell at each end.
     const numRow = (label, get, set, min, max, step) => {
@@ -116,7 +121,7 @@ export class PrisonMode {
 
     const hint = document.createElement('div');
     hint.className = 'hint';
-    hint.textContent = 'Click a cell (or type x,y) to select — then Up cages it high, Down starts the bob.';
+    hint.textContent = 'Click a cell (or type x,y) to select — Up cages it high, Down starts the bob, “switch to C” darkens the current lights and lights a # around the newly-selected cell.';
 
     this.el.append(canvas, selRow, btnRow, oscRow, botRow, topRow, hint);
     this.canvas = canvas;
@@ -216,10 +221,55 @@ export class PrisonMode {
       for (const p of this.trapPanels) this.releasing.set(p.key, { panel: p, b: p.brightness });
       this.engine.sweepTo(this._moves(this.releasePos), { brightness: 0 });
     }
+    for (const p of this._cPanels) this.engine.off(p.x, p.y, p.orient); // clear any lit "#"
+    this._cPanels = [];
     this._bobbing = false;
     this.trapCell = null;
     this.trapPanels = [];
     this.bobTarget = null;
+  }
+
+  /**
+   * "switch to C": turn the current prison lights OFF without moving anything (a bare note-off per
+   * lit panel — cage and/or previous "#" stay where they are, just dark), then light a "#" around
+   * the newly-selected cell — its 4 edges plus 8 extensions off the corners — with the default
+   * lights-on (a +1-step pulse per panel, the cheap in-place relight).
+   */
+  _switchToC() {
+    const cell = this._selected || this._parseCell();
+    if (!cell) return;
+    this._bobbing = false;
+    // 1. Lights off, NO movement.
+    for (const p of [...this.trapPanels, ...this._cPanels]) this.engine.off(p.x, p.y, p.orient);
+    this.trapPanels = [];
+    this.trapCell = null;
+    this.bobTarget = null;
+    // 2. Light the "#" around the new cell with a +1-step lights-on (move to the panel's current z
+    //    with light → a single note-on that lights and steps it up one).
+    const hash = this._hashPanels(cell.x, cell.y);
+    for (const p of hash) {
+      const note = this.engine.noteAt(p.x, p.y, p.orient);
+      const z = this.engine.state?.get?.(note)?.z ?? 0;
+      this.engine.move(p.x, p.y, p.orient, zToPos(z), this.peak);
+    }
+    this._cPanels = hash;
+  }
+
+  /**
+   * The "#" of panels around cell (x,y): its 4 edge walls, plus the 8 that extend those walls off
+   * the corners (each horizontal wall reaches one cell left/right, each vertical wall one up/down).
+   * Filters to panels that actually exist (drops any that fall off the maze).
+   */
+  _hashPanels(x, y) {
+    const cand = [
+      { x, y: y - 1, orient: 'h' }, { x, y, orient: 'h' },                       // N, S edges
+      { x: x - 1, y, orient: 'v' }, { x, y, orient: 'v' },                       // W, E edges
+      { x: x - 1, y: y - 1, orient: 'h' }, { x: x + 1, y: y - 1, orient: 'h' },  // N wall extended W/E
+      { x: x - 1, y, orient: 'h' }, { x: x + 1, y, orient: 'h' },                // S wall extended W/E
+      { x: x - 1, y: y - 1, orient: 'v' }, { x: x - 1, y: y + 1, orient: 'v' },  // W wall extended N/S
+      { x, y: y - 1, orient: 'v' }, { x, y: y + 1, orient: 'v' },                // E wall extended N/S
+    ];
+    return cand.filter((p) => this.engine.get(p.x, p.y, p.orient));
   }
 
   /** Glow value for a phase (radians): pulses 0..1, biased to spend more time bright. */
