@@ -177,6 +177,10 @@ demos:
       rippleSize: 0.08
       holdMs: 800
       oppose: 0
+      # Panels frozen at pinZ (level 4) and never rippled — the frames of the two adjacent cells
+      # (2,3) and (3,3).
+      pinZ: 4
+      pinned: ["2,2,h", "1,3,v", "2,3,h", "2,3,v", "3,2,h", "3,3,h", "3,3,v"]
       loop: true
     uiParams:
       - { key: n,               label: particles,     min: 1,    max: 8,    step: 1    }

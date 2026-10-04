@@ -158,6 +158,8 @@ function particlesPlan(engine, params) {
   const rippleSize      = params.rippleSize ?? 0.08;
   const holdMs          = Math.max(0, params.holdMs ?? 800);
   const oppose          = (params.oppose  ?? 0) > 0;
+  const pinnedKeys      = new Set(params.pinned ?? []); // panels frozen at `pinZ`, never rippled
+  const pinZ            = params.pinZ ?? 4;
 
   const panels = engine.list();
   const cells  = cellsOf(engine);
@@ -191,6 +193,9 @@ function particlesPlan(engine, params) {
   const maxDepth = Math.max(1, ...depth.values());
 
   const structData = panels.map((p) => {
+    const key = `${p.x},${p.y},${p.orient}`;
+    // Pinned panels are frozen at `pinZ` (out of the hill) and never rippled.
+    if (pinnedKeys.has(key)) return { p, pos: zToPos(pinZ) };
     // Panel height from its cell's depth: 0 on the walls, rising to a peak (structureHeight) in the
     // middle. `elasticity` scales how far the middle rises (1 = full height, 0 = flat on the floor).
     const d = depth.get(`${p.x},${p.y}`) ?? 0;
@@ -198,6 +203,10 @@ function particlesPlan(engine, params) {
     return { p, pos };
   });
   const posOf = new Map(structData.map(({ p, pos }) => [`${p.x},${p.y},${p.orient}`, pos]));
+
+  // Panels the spiral is allowed to ripple — pinned ones are excluded so a particle never touches
+  // them (they sit frozen at `pinZ`).
+  const rippleable = panels.filter((p) => !pinnedKeys.has(`${p.x},${p.y},${p.orient}`));
 
   // Archimedean spiral trajectory (nearest-panel mapping).
   const numSamples  = Math.max(panels.length * 4, 400);
@@ -210,7 +219,7 @@ function particlesPlan(engine, params) {
     const sx    = ccx + r * Math.cos(theta);
     const sy    = ccy + r * Math.sin(theta);
     let nearest = null, nd = Infinity;
-    for (const p of panels) {
+    for (const p of rippleable) {
       const { px, py } = panelCenter(p.x, p.y, p.orient);
       const d  = Math.hypot(px - sx, py - sy);
       if (d < nd) { nd = d; nearest = p; }
@@ -220,7 +229,7 @@ function particlesPlan(engine, params) {
       if (!visited.has(key)) { spiralOrder.push(nearest); visited.add(key); }
     }
   }
-  for (const p of panels) {
+  for (const p of rippleable) {
     const key = `${p.x},${p.y},${p.orient}`;
     if (!visited.has(key)) spiralOrder.push(p);
   }
